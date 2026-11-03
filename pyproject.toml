@@ -1,0 +1,21 @@
+# Tooling config only: Bastion's Python is standard library and needs no install.
+[project]
+name = "bastion"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "N", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"services/*/app.py" = ["S104"]  # containers must listen on all interfaces
+"**/test_*.py" = ["S101", "S310"]  # tests call a local server they started
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+files = ["tools", "services/hello/app.py"]

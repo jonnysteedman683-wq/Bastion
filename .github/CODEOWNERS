@@ -1,0 +1,7 @@
+# Guarded paths: changes need the owner's review once branch protection requires it.
+/.github/                 @jonnysteedman683-wq
+/deploy/policy.json       @jonnysteedman683-wq
+/infra/                   @jonnysteedman683-wq
+/tools/quartermaster/     @jonnysteedman683-wq
+/AGENTS.md                @jonnysteedman683-wq
+/CLAUDE.md                @jonnysteedman683-wq

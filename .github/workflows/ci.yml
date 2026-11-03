@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Policy, tests and images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Lint, format and type-check
+        run: |
+          python -m pip install --quiet ruff==0.16.9 mypy==2.3.1 actionlint-py==1.7.12.25 shellcheck-py==0.11.0.1
+          ruff check .
+          ruff format --check .
+          mypy
+          actionlint .github/workflows/*.yml
+          shellcheck infra/gcp/*.sh
+
+      - name: Validate policy and every service manifest
+        run: python -m tools.quartermaster validate
+
+      - name: Quartermaster tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Service tests
+        run: |
+          for dir in services/*/; do
+            echo "::group::${dir}"
+            python -m unittest discover -s "$dir" -v
+            echo "::endgroup::"
+          done
+
+      - name: Build and smoke-test every service image
+        run: |
+          for dir in services/*/; do
+            name=$(basename "$dir")
+            port=$(jq -r .port "${dir}deploy.json")
+            health=$(jq -r .health "${dir}deploy.json")
+            docker build --pull -t "bastion-ci/${name}" "$dir"
+            docker run -d --rm --name "smoke-${name}" -e PORT="$port" -p "18080:${port}" "bastion-ci/${name}"
+            ok=false
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if curl --fail --silent "http://127.0.0.1:18080${health}"; then ok=true; break; fi
+              sleep 1
+            done
+            docker logs "smoke-${name}"
+            docker stop "smoke-${name}" >/dev/null
+            if [[ "$ok" != "true" ]]; then
+              echo "::error::${name} image failed its health check"
+              exit 1
+            fi
+            echo
+          done

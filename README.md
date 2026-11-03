@@ -1,1 +1,49 @@
 # Bastion
+
+Bastion is the command centre for Jonny's agent fleet: one private place to see every agent,
+summon them, approve their riskier work, and watch what it all costs. A sanitized public view
+shows the fleet at work.
+
+```
+                 Control plane                         Data plane              Execution
+  ┌───────────────────────────────────────┐     ┌──────────────────┐   ┌──────────────────────┐
+  │ Command centre (Cloud Run, private,   │◄────│ UniSync ledger   │◄──│ GitHub Actions:      │
+  │ behind Cloudflare Access)             │────►│ (Supabase):      │   │ agent runs,          │
+  │ Public view (Cloudflare Workers,      │◄────│ append-only,     │◄──│ Quartermaster        │
+  │ sanitized snapshot only)              │     │ hash-chained     │   │ PC + Oracle VM:      │
+  └───────────────────────────────────────┘     └──────────────────┘   │ owner key, Vortex    │
+                                                                       └──────────────────────┘
+```
+
+Nothing in the cloud calls into an agent; agents write to the ledger, dashboards read from it.
+
+## What's here (M0)
+
+| Path | What it is |
+| --- | --- |
+| `.github/workflows/quartermaster.yml` | The only path into Google Cloud: validate → test → build → deploy with no traffic → health check → shift traffic |
+| `.github/workflows/deploy-hello.yml` | Calls Quartermaster for the `hello` service |
+| `.github/workflows/ci.yml` | Policy check, unit tests, image build and smoke test on every PR |
+| `deploy/policy.json` | Hard caps every service must respect (guarded file) |
+| `tools/quartermaster/` | Manifest validator, standard library only |
+| `services/hello/` | The smallest possible service, to prove the pipeline |
+| `infra/gcp/bootstrap.sh` | One-time keyless Google Cloud setup |
+| `docs/` | [Quartermaster runbook](docs/QUARTERMASTER.md) and [backlog](docs/BACKLOG.md) |
+
+## Checks
+
+```bash
+python -m tools.quartermaster validate
+python -m unittest discover -s tests -t .
+python -m unittest discover -s services/hello
+```
+
+Everything is Python standard library: no install step.
+
+## Ground rules
+
+- Every deploy goes through Quartermaster. No one, human or agent, deploys by hand.
+- Services are private by default and capped at 2 instances. The cap lives in code and in a guarded file.
+- Google credentials are keyless (Workload Identity Federation), trusted only for the Quartermaster
+  workflow on `main` of this repository.
+- Agents follow [AGENTS.md](AGENTS.md).

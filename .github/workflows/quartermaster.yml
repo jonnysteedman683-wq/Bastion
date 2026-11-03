@@ -1,0 +1,256 @@
+# Quartermaster: Bastion's only path into Google Cloud.
+#
+# A reusable workflow. Each service has a tiny caller workflow (deploy-<service>.yml)
+# that passes its folder name. The pipeline:
+#
+#   preflight  validate deploy.json against deploy/policy.json, run the service tests
+#   deploy     build -> push -> new revision with NO traffic -> health check its tag URL
+#              -> shift 100% traffic -> prune old tags
+#
+# If the health check fails, traffic never moves and the previous revision keeps serving.
+# Until the repository variables below exist, preflight still runs and deploy is skipped.
+#
+# Repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   GCP_PROJECT_ID     e.g. bastion-prod-123456
+#   GCP_REGION         optional, defaults to us-central1
+#   GCP_WIF_PROVIDER   projects/<number>/locations/global/workloadIdentityPools/github/providers/bastion
+#   GCP_DEPLOY_SA      quartermaster@<project>.iam.gserviceaccount.com
+#   GCP_RUNTIME_SA     bastion-runtime@<project>.iam.gserviceaccount.com
+# No secrets: Google credentials come from Workload Identity Federation, keyless.
+
+name: Quartermaster
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Folder name under services/
+        required: true
+        type: string
+      environment:
+        description: GitHub Environment that gates the deploy job
+        required: false
+        type: string
+        default: production
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Preflight (${{ inputs.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      configured: ${{ steps.config.outputs.configured }}
+      port: ${{ steps.manifest.outputs.port }}
+      health: ${{ steps.manifest.outputs.health }}
+      max_instances: ${{ steps.manifest.outputs.max_instances }}
+      access: ${{ steps.manifest.outputs.access }}
+      memory: ${{ steps.manifest.outputs.memory }}
+      set_secrets: ${{ steps.manifest.outputs.set_secrets }}
+    env:
+      SERVICE: ${{ inputs.service }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check service name
+        run: |
+          if [[ ! "$SERVICE" =~ ^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$ ]]; then
+            echo "::error::Invalid service name: $SERVICE"
+            exit 1
+          fi
+
+      - name: Validate manifest against policy
+        id: manifest
+        run: python -m tools.quartermaster outputs "services/${SERVICE}/deploy.json" >> "$GITHUB_OUTPUT"
+
+      - name: Run service tests
+        run: python -m unittest discover -s "services/${SERVICE}" -v
+
+      - name: Check Google Cloud configuration
+        id: config
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOYER: ${{ vars.GCP_DEPLOY_SA }}
+          RUNTIME: ${{ vars.GCP_RUNTIME_SA }}
+        run: |
+          if [[ -n "$PROJECT" && -n "$PROVIDER" && -n "$DEPLOYER" && -n "$RUNTIME" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Google Cloud is not configured yet (see docs/QUARTERMASTER.md); skipping deploy."
+          fi
+
+  deploy:
+    name: Deploy (${{ inputs.service }})
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: quartermaster-${{ inputs.service }}
+      cancel-in-progress: false
+    env:
+      SERVICE: ${{ inputs.service }}
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      RUNTIME_SA: ${{ vars.GCP_RUNTIME_SA }}
+      AUDIENCE: bastion-quartermaster
+      PORT: ${{ needs.preflight.outputs.port }}
+      HEALTH: ${{ needs.preflight.outputs.health }}
+      MAX_INSTANCES: ${{ needs.preflight.outputs.max_instances }}
+      ACCESS: ${{ needs.preflight.outputs.access }}
+      MEMORY: ${{ needs.preflight.outputs.memory }}
+      SET_SECRETS: ${{ needs.preflight.outputs.set_secrets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Refuse public Cloud Run services
+        if: env.ACCESS != 'private'
+        run: |
+          echo "::error::Quartermaster only deploys private Cloud Run services. The public view runs on Cloudflare Workers."
+          exit 1
+
+      - name: Name the image and tag
+        id: names
+        run: |
+          echo "tag=qm-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "image=${REGION}-docker.pkg.dev/${PROJECT}/bastion/${SERVICE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud (keyless)
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: id_token
+          id_token_audience: bastion-quartermaster
+          id_token_include_email: true
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build --pull \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$IMAGE" "services/${SERVICE}"
+          docker push "$IMAGE"
+
+      - name: Deploy new revision (no traffic yet)
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          TAG: ${{ steps.names.outputs.tag }}
+        run: |
+          args=(run deploy "$SERVICE"
+            --project "$PROJECT" --region "$REGION"
+            --image "$IMAGE" --tag "$TAG"
+            --port "$PORT" --memory "$MEMORY"
+            --min-instances 0 --max-instances "$MAX_INSTANCES"
+            --service-account "$RUNTIME_SA"
+            --add-custom-audiences "$AUDIENCE"
+            --set-env-vars "BASTION_VERSION=${GITHUB_SHA}"
+            --quiet)
+          if [[ -n "$SET_SECRETS" ]]; then
+            args+=(--set-secrets "$SET_SECRETS")
+          fi
+          if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format="value(metadata.name)" >/dev/null 2>&1; then
+            args+=(--no-traffic)
+          else
+            # Cloud Run refuses --no-traffic when creating a service; a first revision has nothing to protect.
+            echo "::notice::First deploy of ${SERVICE}: the new revision receives traffic immediately."
+          fi
+          gcloud "${args[@]}"
+
+      - name: Confirm the service is private
+        run: |
+          members=$(gcloud run services get-iam-policy "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --format="value(bindings.members)")
+          if grep -Eq "allUsers|allAuthenticatedUsers" <<<"$members"; then
+            echo "::error::${SERVICE} is publicly invokable. Remove the allUsers binding before deploying."
+            exit 1
+          fi
+
+      - name: Health check the new revision
+        id: health
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json \
+            | jq -r --arg tag "$TAG" '.status.traffic[] | select(.tag == $tag) | .url')
+          if [[ -z "$url" || "$url" == "null" ]]; then
+            echo "::error::No URL found for tag ${TAG}"
+            exit 1
+          fi
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent --show-error --max-time 10 \
+                -H "Authorization: Bearer ${ID_TOKEN}" "${url}${HEALTH}"; then
+              echo
+              echo "Healthy on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::${url}${HEALTH} did not become healthy; traffic was not moved."
+          exit 1
+
+      - name: Shift all traffic to the new revision
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --to-tags "${TAG}=100" --quiet
+
+      - name: Remove older Quartermaster tags
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+        run: |
+          old=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json \
+            | jq -r --arg tag "$TAG" '[.spec.traffic[]? | .tag // empty | select(startswith("qm-") and . != $tag)] | unique | join(",")')
+          if [[ -n "$old" ]]; then
+            gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --remove-tags "$old" --quiet
+          fi
+
+      - name: Deploy record
+        if: always()
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          IMAGE: ${{ steps.names.outputs.image }}
+          URL: ${{ steps.health.outputs.url }}
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "### Quartermaster: ${SERVICE}"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Result | ${RESULT} |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Tag | \`${TAG}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Tag URL | ${URL:-n/a} |"
+            if [[ "$RESULT" != "success" ]]; then
+              echo
+              echo "Traffic was not moved unless the shift step succeeded; the previous revision keeps serving."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

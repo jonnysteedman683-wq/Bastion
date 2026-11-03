@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "max_instances_cap": 2,
+  "allowed_services": ["hello"],
+  "public_allowlist": [],
+  "allowed_memory": ["256Mi", "512Mi"]
+}

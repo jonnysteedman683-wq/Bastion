@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+gha-creds-*.json
+.ruff_cache/
+.mypy_cache/

@@ -7,6 +7,8 @@ Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog
 - `roster.json`: the agents shown on the roster.
 - `ledger/bastion_reader.sql`: read-only `bastion.feed` and `bastion.roster` views over the existing UniSync tables
   (Supabase project UNISYNCARC), and the `bastion_reader` role that can read only those.
+- `ledger/bastion_tasks_control.sql`: `bastion.tasks` (each task's status, by Lestinxor's rules) and `bastion.control`
+  (LinX's kill switch), both read-only.
 
 ## Data source
 

@@ -17,7 +17,7 @@ Exit: summon to live result on the dashboard with no API key, at $0.
 
 - [ ] S1 Command centre v0: shadcn-admin shell, roster, live ledger feed (read-only Supabase role)
 - [ ] S2 🔒 Cloudflare Access in front of the command centre
-- [ ] S3 Summon: post a `task.request`, dispatch `sebastian demo` on GitHub Actions, show the result
+- [x] S3 Summon: post a `task.request`, dispatch `sebastian demo` on GitHub Actions, show the result
 
 ## M2 · Safety
 Exit: a deliberate cap breach pauses the agent and alerts Jonny.

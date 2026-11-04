@@ -5,6 +5,8 @@ not an AI agent: it holds the only cloud access, and only for one workflow on `m
 
 ## One-time setup
 
+New to Google Cloud? Follow the click-by-click [easy setup guide](GCP_SETUP.md) instead.
+
 1. Create the Google Cloud project and link billing:
    [new project](https://console.cloud.google.com/projectcreate).
 2. Set a budget alert (it notifies; it does not cap spend):

@@ -1,0 +1,7 @@
+[
+  {"name": "Quartermaster", "role": "Deploys services to Cloud Run", "runs_on": "GitHub Actions"},
+  {"name": "Sebastian", "role": "Summoned tasks and demos", "runs_on": "GitHub Actions"},
+  {"name": "Claude", "role": "Coding agent", "runs_on": "Claude Code"},
+  {"name": "Jules", "role": "Coding agent", "runs_on": "Jules"},
+  {"name": "Vortex", "role": "Owner key holder", "runs_on": "PC + Oracle VM"}
+]

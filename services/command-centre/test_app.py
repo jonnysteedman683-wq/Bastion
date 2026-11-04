@@ -7,7 +7,6 @@ import tempfile
 import threading
 import unittest
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +27,9 @@ class FixedLedger:
         if self.fail:
             raise ConnectionError("down")
         return [e for e in self._events if e.id > after][:limit]
+
+    def roster(self) -> list[dict[str, str]]:
+        return app.load_roster()
 
 
 def ev(i: int, agent: str = "Sebastian", ts: str = "2026-11-04T11:30:00Z", kind: str = "task.request") -> app.Event:
@@ -168,27 +170,66 @@ class DemoLedgerTest(unittest.TestCase):
         self.assertTrue({agent for agent, _, _ in app._DEMO_SCRIPT} <= names)
 
 
+class FakeConn:
+    def __init__(self, rows: list[list[object]]) -> None:
+        self.rows = rows
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.closed = False
+
+    def run(self, sql: str, **params: object) -> list[list[object]]:
+        self.calls.append((sql, params))
+        return self.rows
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class PostgresLedgerTest(unittest.TestCase):
+    def test_events_query_and_mapping(self) -> None:
+        conn = FakeConn([[9, "2026-11-04T11:00:00Z", "Sebastian", "task.request", "Run demo"]])
+        events = app.PostgresLedger(lambda: conn).events(after=7, limit=20)
+        self.assertEqual(events, [app.Event(9, "2026-11-04T11:00:00Z", "Sebastian", "task.request", "Run demo")])
+        sql, params = conn.calls[0]
+        self.assertIn("FROM bastion.feed", sql)
+        self.assertNotIn("unisync_", sql)  # never the raw tables
+        self.assertEqual(params, {"after": 7, "limit": 20})
+        self.assertTrue(conn.closed)
+
+    def test_roster_mapping(self) -> None:
+        conn = FakeConn([["Claude", "worker", ["Bastion", "other"]], ["Jonny", "owner", []]])
+        roster = app.PostgresLedger(lambda: conn).roster()
+        self.assertEqual(
+            roster,
+            [
+                {"name": "Claude", "role": "worker", "runs_on": "Bastion, other"},
+                {"name": "Jonny", "role": "owner", "runs_on": "-"},
+            ],
+        )
+        self.assertIn("FROM bastion.roster", conn.calls[0][0])
+
+    def test_connection_closed_on_error(self) -> None:
+        conn = FakeConn([])
+
+        def boom(sql: str, **params: object) -> list[list[object]]:
+            raise ConnectionError("down")
+
+        conn.run = boom  # type: ignore[method-assign]
+        with self.assertRaises(ConnectionError):
+            app.PostgresLedger(lambda: conn).events(0, 1)
+        self.assertTrue(conn.closed)
+
+
 class LedgerConfigTest(unittest.TestCase):
     def test_demo_without_config(self) -> None:
         self.assertIsInstance(app.ledger_from_env({}), app.DemoLedger)
-        self.assertIsInstance(app.ledger_from_env({"LEDGER_URL": "https://x.supabase.co"}), app.DemoLedger)
 
-    def test_supabase_with_config(self) -> None:
-        ledger = app.ledger_from_env({"LEDGER_URL": "https://x.supabase.co/", "LEDGER_READ_KEY": "k"})
-        self.assertIsInstance(ledger, app.SupabaseLedger)
+    def test_postgres_with_dsn(self) -> None:
+        ledger = app.ledger_from_env({"LEDGER_DSN": "postgresql://bastion_reader.ref:pw@host.example:5432/postgres"})
+        self.assertIsInstance(ledger, app.PostgresLedger)
 
-    def test_supabase_requires_https(self) -> None:
+    def test_rejects_non_postgres_dsn(self) -> None:
         with self.assertRaises(ValueError):
-            app.SupabaseLedger("http://x.supabase.co", "k")
-
-    def test_supabase_query(self) -> None:
-        url = app.SupabaseLedger("https://x.supabase.co/", "k").request_url(after=7, limit=20)
-        parts = urllib.parse.urlsplit(url)
-        self.assertEqual(f"{parts.scheme}://{parts.netloc}{parts.path}", "https://x.supabase.co/rest/v1/ledger_events")
-        self.assertEqual(
-            dict(urllib.parse.parse_qsl(parts.query)),
-            {"select": "id,ts,agent,kind,summary", "id": "gt.7", "order": "id.desc", "limit": "20"},
-        )
+            app.ledger_from_env({"LEDGER_DSN": "https://x.supabase.co"})
 
 
 if __name__ == "__main__":

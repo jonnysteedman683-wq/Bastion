@@ -93,12 +93,14 @@ function SourceBadge({ source }: { source: "demo" | "ledger" | null }) {
 function Stats({ agents, events, now }: { agents?: Agent[]; events: LedgerEvent[]; now: Date }) {
   const dayAgo = now.getTime() - 86_400_000;
   const today = events.filter((e) => new Date(e.ts).getTime() >= dayAgo);
-  const lastDeploy = events.find((e) => e.kind === "deploy.record");
   const items = [
     { label: "Agents active", value: agents ? `${agents.filter((a) => a.status === "active").length} / ${agents.length}` : null },
     { label: "Events, last 24h", value: String(today.length) },
     { label: "Task requests, last 24h", value: String(today.filter((e) => e.kind === "task.request").length) },
-    { label: "Last deploy", value: lastDeploy ? timeAgo(lastDeploy.ts, now) : "none yet" },
+    {
+      label: "Failures, last 24h",
+      value: String(today.filter((e) => e.kind === "task.failed" || e.kind === "escalate").length),
+    },
   ];
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -178,6 +180,12 @@ const KIND_STYLE: Record<string, string> = {
   "task.result": "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
   "deploy.record": "border-violet-500/40 text-violet-700 dark:text-violet-300",
   "memory.write": "border-amber-500/40 text-amber-700 dark:text-amber-300",
+  "task.claim": "border-sky-500/40 text-sky-700 dark:text-sky-300",
+  "task.failed": "border-red-500/40 text-red-700 dark:text-red-300",
+  escalate: "border-red-500/40 text-red-700 dark:text-red-300",
+  "approval.request": "border-fuchsia-500/40 text-fuchsia-700 dark:text-fuchsia-300",
+  "approval.decision": "border-fuchsia-500/40 text-fuchsia-700 dark:text-fuchsia-300",
+  heartbeat: "text-muted-foreground",
 };
 
 function FeedCard({ events, now, limit, className }: { events: LedgerEvent[]; now: Date; limit?: number; className?: string }) {

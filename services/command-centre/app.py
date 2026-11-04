@@ -7,11 +7,12 @@
     GET /*             -> the web app (web/dist), with index.html for client-side routes
 
 The browser only ever talks to this server. The ledger is read server-side:
-  - LEDGER_URL and LEDGER_READ_KEY set: the UniSync ledger in Supabase, via its REST API, with a key for
-    the read-only bastion_reader role (see ledger/schema.sql). The key comes from Secret Manager.
+  - LEDGER_DSN set (a Secret Manager secret): the UniSync ledger in Supabase, read as the read-only
+    bastion_reader role through the bastion.feed and bastion.roster views (see ledger/bastion_reader.sql).
   - otherwise: a demo ledger, generated from the clock so the feed visibly moves. The UI labels it.
 
-Standard library only. Logs one JSON line per request to stderr. Shuts down cleanly on SIGTERM.
+Standard library only, plus pg8000 when a ledger is configured.
+Logs one JSON line per request to stderr. Shuts down cleanly on SIGTERM.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ import signal
 import sys
 import threading
 import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,6 +61,10 @@ class Ledger(Protocol):
         """Events with id > after, newest first, at most limit."""
         ...
 
+    def roster(self) -> list[dict[str, str]]:
+        """Every agent: name, role, runs_on."""
+        ...
+
 
 # --- Demo ledger -----------------------------------------------------------------------------
 
@@ -71,10 +75,10 @@ _DEMO_SCRIPT: tuple[tuple[str, str, str], ...] = (
     ("Sebastian", "task.result", "Demo finished: 3 checks passed"),
     ("Claude", "task.request", "Draft backlog item S3 (summon button)"),
     ("Claude", "task.result", "Opened a pull request for review"),
-    ("Quartermaster", "deploy.record", "hello deployed; health check passed, traffic shifted"),
+    ("Quartermaster", "approval.request", "Deploy hello to production: waiting for the owner"),
     ("Jules", "task.request", "Pin the python base image by digest"),
     ("Jules", "memory.write", "Learned: Cloud Run reserves paths ending in z"),
-    ("Vortex", "task.result", "Owner key approved a production deploy"),
+    ("Vortex", "approval.decision", "Owner key approved the production deploy"),
 )
 
 
@@ -91,48 +95,82 @@ class DemoLedger:
         ts = DEMO_EPOCH + n * DEMO_STEP
         return Event(n, ts.strftime("%Y-%m-%dT%H:%M:%SZ"), agent, kind, summary)
 
+    def roster(self) -> list[dict[str, str]]:
+        return load_roster()
+
     def events(self, after: int, limit: int) -> list[Event]:
         latest = int((self._clock() - DEMO_EPOCH) / DEMO_STEP)
         start = max(after + 1, latest - limit + 1, 0)
         return [self._event(n) for n in range(latest, start - 1, -1)]
 
 
-# --- UniSync ledger (Supabase) -----------------------------------------------------------------
+# --- UniSync ledger (Supabase Postgres) -----------------------------------------------------
 
 
-class SupabaseLedger:
-    """Reads the ledger_events table through Supabase's REST API with a read-only key."""
+class Connect(Protocol):
+    def __call__(self) -> Any: ...
+
+
+def _pg8000_connect(dsn: str, timeout: float) -> Connect:
+    """Connection factory for a postgresql:// DSN. pg8000 is imported only when a ledger is configured."""
+    parts = urllib.parse.urlsplit(dsn)
+    if parts.scheme not in ("postgres", "postgresql") or not parts.hostname:
+        raise ValueError("LEDGER_DSN must be a postgresql:// URL")
+
+    def connect() -> Any:
+        import ssl
+
+        import pg8000.native  # type: ignore[import-not-found]  # installed in the image, not needed for tests
+
+        return pg8000.native.Connection(
+            user=urllib.parse.unquote(parts.username or ""),
+            password=urllib.parse.unquote(parts.password or ""),
+            host=parts.hostname,
+            port=parts.port or 5432,
+            database=(parts.path.lstrip("/") or "postgres"),
+            ssl_context=ssl.create_default_context(),
+            timeout=timeout,
+        )
+
+    return connect
+
+
+FEED_SQL = "SELECT id, ts, agent, kind, summary FROM bastion.feed WHERE id > :after ORDER BY id DESC LIMIT :limit"
+ROSTER_SQL = "SELECT name, role, repos FROM bastion.roster ORDER BY name"
+
+
+class PostgresLedger:
+    """Reads the UniSync ledger through the read-only bastion.feed and bastion.roster views."""
 
     source = "ledger"
 
-    def __init__(self, url: str, key: str, timeout: float = 5.0) -> None:
-        if not url.startswith("https://"):
-            raise ValueError("LEDGER_URL must be an https:// Supabase project URL")
-        self._base = url.rstrip("/") + "/rest/v1/ledger_events"
-        self._key = key
-        self._timeout = timeout
+    def __init__(self, connect: Connect) -> None:
+        self._connect = connect
 
-    def request_url(self, after: int, limit: int) -> str:
-        query = urllib.parse.urlencode(
-            {"select": "id,ts,agent,kind,summary", "id": f"gt.{after}", "order": "id.desc", "limit": str(limit)}
-        )
-        return f"{self._base}?{query}"
+    def _run(self, sql: str, **params: object) -> list[list[Any]]:
+        conn = self._connect()
+        try:
+            rows: list[list[Any]] = conn.run(sql, **params)
+            return rows
+        finally:
+            conn.close()
 
     def events(self, after: int, limit: int) -> list[Event]:
-        req = urllib.request.Request(  # noqa: S310 - URL is fixed to https:// in __init__
-            self.request_url(after, limit),
-            headers={"apikey": self._key, "Authorization": f"Bearer {self._key}", "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
-            rows = json.load(resp)
-        return [Event(int(r["id"]), str(r["ts"]), str(r["agent"]), str(r["kind"]), str(r["summary"])) for r in rows]
+        rows = self._run(FEED_SQL, after=after, limit=limit)
+        return [Event(int(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4])) for r in rows]
+
+    def roster(self) -> list[dict[str, str]]:
+        out = []
+        for name, role, repos in self._run(ROSTER_SQL):
+            out.append({"name": str(name), "role": str(role), "runs_on": ", ".join(repos or []) or "-"})
+        return out
 
 
 def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:
     env = dict(os.environ) if env is None else env
-    url, key = env.get("LEDGER_URL", ""), env.get("LEDGER_READ_KEY", "")
-    if url and key:
-        return SupabaseLedger(url, key)
+    dsn = env.get("LEDGER_DSN", "")
+    if dsn:
+        return PostgresLedger(_pg8000_connect(dsn, timeout=5.0))
     return DemoLedger()
 
 
@@ -170,9 +208,7 @@ def _parse_int(value: str | None, default: int, low: int, high: int) -> int:
     return min(max(n, low), high)
 
 
-def make_handler(
-    version: str, ledger: Ledger, roster: list[dict[str, str]], static_dir: Path
-) -> type[BaseHTTPRequestHandler]:
+def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTTPRequestHandler]:
     static_root = static_dir.resolve()
 
     class Handler(BaseHTTPRequestHandler):
@@ -195,7 +231,11 @@ def make_handler(
                 self._ledger_call(
                     lambda: {
                         "source": ledger.source,
-                        "agents": roster_with_status(roster, ledger.events(0, MAX_LIMIT), datetime.now(UTC)),
+                        "agents": roster_with_status(
+                            ledger.roster(),
+                            ledger.events(0, MAX_LIMIT),
+                            datetime.now(UTC),
+                        ),
                     }
                 )
             elif path.startswith("/api/"):
@@ -257,7 +297,7 @@ def build_server(
     ledger: Ledger | None = None,
     static_dir: Path = STATIC_DIR,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(version, ledger or ledger_from_env(), load_roster(), static_dir)
+    handler = make_handler(version, ledger or ledger_from_env(), static_dir)
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

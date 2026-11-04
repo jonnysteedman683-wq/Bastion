@@ -83,6 +83,7 @@ jobs:
       - name: Run sebastian demo
         id: run
         run: |
+          mkdir -p "$RUNNER_TEMP/ws"
           set +e
           sebastian demo -w "$RUNNER_TEMP/ws" > "$RUNNER_TEMP/out.txt" 2>&1
           code=$?

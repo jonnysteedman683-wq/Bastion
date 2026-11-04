@@ -15,13 +15,14 @@ import os
 import signal
 import sys
 import threading
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SERVICE = "hello"
 HEALTH_PATH = "/health"
 
 
-def health_status(env: "os._Environ[str] | dict[str, str]" = os.environ) -> int:
+def health_status(env: Mapping[str, str] = os.environ) -> int:
     """Q2 drill (temporary, revert after): fail health on Cloud Run only, which sets K_SERVICE.
 
     Tests and the CI image smoke test still pass, so Quartermaster builds and deploys the

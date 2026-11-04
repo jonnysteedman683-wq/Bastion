@@ -1,0 +1,16 @@
+# One tap from the command centre: Sebastian writes and verifies hello.txt (scripted, offline). No inputs, so GitHub's Run button is all it takes.
+name: Summon demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summon:
+    uses: ./.github/workflows/summon.yml
+    with:
+      title: Run the Sebastian demo
+      mode: demo
+    secrets: inherit

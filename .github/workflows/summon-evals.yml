@@ -1,0 +1,16 @@
+# One tap from the command centre: Sebastian's offline capability and prompt-injection suite. No inputs, so GitHub's Run button is all it takes.
+name: Summon evals
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summon:
+    uses: ./.github/workflows/summon.yml
+    with:
+      title: Run Sebastian's eval suite
+      mode: evals
+    secrets: inherit

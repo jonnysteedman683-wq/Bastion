@@ -34,6 +34,8 @@ OWNER = "jonny"
 FLOW = "bastion-summon"
 PREFIX = "bastion"
 MAX_LINE = 200
+MAX_OUTPUT = 1500  # characters of output tail kept on the ledger
+MAX_OUTPUT_LINES = 25
 GATEWAY_ENV = "UNISYNC_GATEWAY_URL"
 ORCHESTRATOR_TOKEN_ENV = "UNISYNC_ORCHESTRATOR_TOKEN"  # noqa: S105 - env var name, not a secret
 AGENT_TOKEN_ENV = "UNISYNC_AGENT_TOKEN"  # noqa: S105 - env var name, not a secret
@@ -45,7 +47,7 @@ def task_id(title: str, head: str) -> str:
     return f"{PREFIX}/{slug}-{hashlib.sha256((head + title).encode()).hexdigest()[:6]}"
 
 
-def request(ledger: Any, title: str, *, agent: str, run_url: str) -> str:
+def request(ledger: Any, title: str, *, agent: str, run_url: str, mode: str = "") -> str:
     """Post the task.request as the orchestrator. Returns the task id."""
     title = title.strip()[:MAX_LINE]
     if not title:
@@ -54,17 +56,17 @@ def request(ledger: Any, title: str, *, agent: str, run_url: str) -> str:
     view = getattr(ledger, "ledger", ledger)
     head = view.entries[-1].digest if view.entries else ""
     tid = task_id(title, head)
-    ledger.post(
-        ORCHESTRATOR,
-        "task.request",
-        tid,
-        title=title,
-        flow=FLOW,
-        agent=agent,
-        unattended=True,
-        requested_by=OWNER,
-        run_url=run_url,
-    )
+    body: dict[str, Any] = {
+        "title": title,
+        "flow": FLOW,
+        "agent": agent,
+        "unattended": True,
+        "requested_by": OWNER,
+        "run_url": run_url,
+    }
+    if mode:
+        body["mode"] = mode
+    ledger.post(ORCHESTRATOR, "task.request", tid, **body)
     return tid
 
 
@@ -73,13 +75,27 @@ def _last_line(output: str) -> str:
     return lines[-1][:MAX_LINE] if lines else ""
 
 
+def _tail(output: str) -> str:
+    """The last lines of output, at most MAX_OUTPUT_LINES lines and MAX_OUTPUT characters."""
+    lines = output.rstrip().splitlines()[-MAX_OUTPUT_LINES:]
+    return "\n".join(lines)[-MAX_OUTPUT:]
+
+
 def outcome(exit_code: int, output: str, *, run_url: str) -> tuple[str, dict[str, Any]]:
-    """The kind and body that report a finished run: task.result on exit 0, else task.failed."""
+    """The kind and body that report a finished run: task.result on exit 0, else task.failed.
+
+    Both carry the tail of the run's output, so the command centre can show why a run failed.
+    """
     line = _last_line(output)
+    tail = _tail(output)
     if exit_code == 0:
-        return "task.result", {"summary": line or "finished with no output", "exit_code": 0, "run_url": run_url}
-    reason = f"exit {exit_code}: {line or 'no output'}"[:MAX_LINE]
-    return "task.failed", {"reason": reason, "exit_code": exit_code, "run_url": run_url}
+        body: dict[str, Any] = {"summary": line or "finished with no output", "exit_code": 0, "run_url": run_url}
+    else:
+        reason = f"exit {exit_code}: {line or 'no output'}"[:MAX_LINE]
+        body = {"reason": reason, "exit_code": exit_code, "run_url": run_url}
+    if tail:
+        body["output"] = tail
+    return ("task.result" if exit_code == 0 else "task.failed"), body
 
 
 def open_gateway_ledger(token_env: str) -> Any:
@@ -101,6 +117,7 @@ def main(
     req.add_argument("--title", required=True)
     req.add_argument("--agent", required=True)
     req.add_argument("--run-url", default="")
+    req.add_argument("--mode", default="", help="which summon this is, e.g. demo or evals")
     claim = sub.add_parser("claim", help="the agent claims the task")
     claim.add_argument("--task-id", required=True)
     claim.add_argument("--agent", required=True)
@@ -113,7 +130,9 @@ def main(
     args = parser.parse_args(argv)
 
     if args.cmd == "request":
-        tid = request(open_ledger(ORCHESTRATOR_TOKEN_ENV), args.title, agent=args.agent, run_url=args.run_url)
+        tid = request(
+            open_ledger(ORCHESTRATOR_TOKEN_ENV), args.title, agent=args.agent, run_url=args.run_url, mode=args.mode
+        )
         print(tid, file=out)
     elif args.cmd == "claim":
         open_ledger(AGENT_TOKEN_ENV).post(args.agent, "task.claim", args.task_id)

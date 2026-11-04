@@ -4,7 +4,8 @@
 # Run it in Cloud Shell (https://shell.cloud.google.com) after creating the project
 # and linking billing:
 #
-#   PROJECT_ID=your-project-id bash infra/gcp/bootstrap.sh
+#   bash infra/gcp/bootstrap.sh your-project-id
+#   (or: PROJECT_ID=your-project-id bash infra/gcp/bootstrap.sh)
 #
 # It creates, or leaves alone if present:
 #   - the APIs Quartermaster needs
@@ -17,7 +18,9 @@
 # No service-account keys are created, ever.
 set -euo pipefail
 
-PROJECT_ID="${PROJECT_ID:?Set PROJECT_ID, e.g. PROJECT_ID=bastion-prod-123456}"
+# Project: $PROJECT_ID, else the first argument (bash bootstrap.sh my-project-id).
+PROJECT_ID="${PROJECT_ID:-${1:-}}"
+PROJECT_ID="${PROJECT_ID:?Pass the project id: bash infra/gcp/bootstrap.sh my-project-id}"
 REGION="${REGION:-us-central1}"
 GITHUB_REPO="${GITHUB_REPO:-jonnysteedman683-wq/Bastion}"
 GITHUB_REPO_ID="${GITHUB_REPO_ID:-1444910871}"

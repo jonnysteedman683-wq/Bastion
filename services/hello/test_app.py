@@ -61,13 +61,3 @@ class HelloServiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class Q2DrillTest(unittest.TestCase):
-    """Q2 drill (temporary): /health fails only on Cloud Run, so Quartermaster must hold traffic."""
-
-    def test_health_fails_on_cloud_run(self) -> None:
-        self.assertEqual(app.health_status({"K_SERVICE": "hello"}), 503)
-
-    def test_health_ok_elsewhere(self) -> None:
-        self.assertEqual(app.health_status({}), 200)

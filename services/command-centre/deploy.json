@@ -2,7 +2,7 @@
   "service": "command-centre",
   "port": 8080,
   "health": "/health",
-  "secrets": [],
+  "secrets": ["LEDGER_DSN"],
   "max_instances": 1,
   "access": "private",
   "memory": "256Mi"

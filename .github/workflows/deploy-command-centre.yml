@@ -1,0 +1,24 @@
+name: Deploy command-centre
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - services/command-centre/**
+      - tools/quartermaster/**
+      - deploy/policy.json
+      - .github/workflows/quartermaster.yml
+      - .github/workflows/deploy-command-centre.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quartermaster:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/quartermaster.yml
+    with:
+      service: command-centre

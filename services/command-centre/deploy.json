@@ -1,0 +1,9 @@
+{
+  "service": "command-centre",
+  "port": 8080,
+  "health": "/health",
+  "secrets": [],
+  "max_instances": 1,
+  "access": "private",
+  "memory": "256Mi"
+}

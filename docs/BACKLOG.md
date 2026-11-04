@@ -7,7 +7,7 @@ Milestones follow the Bastion master plan. A milestone is done only when its exi
 Exit: `hello` deploys, and a failed health check leaves the previous revision serving.
 
 - [x] Q0 🔒 Quartermaster reusable workflow, manifest policy, `hello` service, keyless bootstrap
-- [ ] Q1 Owner runs `infra/gcp/bootstrap.sh` and sets the repository variables (docs/QUARTERMASTER.md)
+- [x] Q1 Owner runs `infra/gcp/bootstrap.sh` and sets the repository variables (docs/QUARTERMASTER.md)
 - [ ] Q2 First deploy of `hello`; then a deliberately broken `/health` proves traffic does not move
 - [ ] Q3 🔒 Pin the `python:3.13-slim` base image by digest and add a weekly refresh PR
 - [ ] Q4 🔒 Write each deploy record to the UniSync ledger (needs the Supabase project)

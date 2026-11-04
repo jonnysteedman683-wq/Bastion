@@ -21,6 +21,15 @@ SERVICE = "hello"
 HEALTH_PATH = "/health"
 
 
+def health_status(env: "os._Environ[str] | dict[str, str]" = os.environ) -> int:
+    """Q2 drill (temporary, revert after): fail health on Cloud Run only, which sets K_SERVICE.
+
+    Tests and the CI image smoke test still pass, so Quartermaster builds and deploys the
+    revision, and its health check must then refuse to move traffic to it.
+    """
+    return 503 if env.get("K_SERVICE") else 200
+
+
 def make_handler(version: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "bastion-hello"
@@ -29,7 +38,9 @@ def make_handler(version: str) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == HEALTH_PATH:
-                self._send(200, "application/json", {"status": "ok", "service": SERVICE, "version": version})
+                code = health_status()
+                state = "ok" if code == 200 else "drill-failing"
+                self._send(code, "application/json", {"status": state, "service": SERVICE, "version": version})
             elif path == "/":
                 self._send(200, "text/plain; charset=utf-8", "Bastion stands.\n")
             else:

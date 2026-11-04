@@ -1,0 +1,116 @@
+# Summon: ask Sebastian to run a task, through the UniSync ledger, at $0 and with no model API key.
+#
+#   1. lestinxor (orchestrator) posts task.request with flow "bastion-summon", as LinX's nightly loop does
+#   2. sebastian claims it, runs `sebastian demo` (offline, scripted), and posts task.result or task.failed
+#
+# Every post goes through the UniSync gateway with a token scoped to one agent and its allowed kinds.
+# The command centre and `linx log` show the task as it moves. Start it from Actions -> Summon -> Run.
+#
+# Secrets (only their sha256 is stored in the ledger's unisync_tokens):
+#   UNISYNC_ORCHESTRATOR_TOKEN  lestinxor, may post task.request only
+#   UNISYNC_AGENT_TOKEN         sebastian, may post task.claim, task.result, task.failed only
+
+name: Summon
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: What to ask Sebastian for (shown in the command centre)
+        required: true
+        default: Run the Sebastian demo
+
+permissions:
+  contents: read
+
+concurrency:
+  group: summon
+  cancel-in-progress: false
+
+jobs:
+  summon:
+    name: Summon sebastian
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AGENT: sebastian
+      UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
+      SEBASTIAN_SHA: 098dc29c2fba8f77c2eeab168d803d14a2cb7391
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check the tokens are set
+        env:
+          ORCHESTRATOR: ${{ secrets.UNISYNC_ORCHESTRATOR_TOKEN }}
+          WORKER: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+        run: |
+          if [[ -z "$ORCHESTRATOR" || -z "$WORKER" ]]; then
+            echo "::error::Set the UNISYNC_ORCHESTRATOR_TOKEN and UNISYNC_AGENT_TOKEN repository secrets."
+            exit 1
+          fi
+
+      - name: Install Lestinxor and Sebastian (pinned commits, no dependencies)
+        run: |
+          python -m pip install --quiet --no-deps \
+            "lestinxor @ git+https://github.com/jonnysteedman683-wq/LESTINXOR-AGENT.git@${LESTINXOR_SHA}" \
+            "sebastian @ git+https://github.com/jonnysteedman683-wq/Sebastian.git@${SEBASTIAN_SHA}"
+
+      - name: Post the task (lestinxor)
+        id: request
+        env:
+          TITLE: ${{ inputs.title }}
+          UNISYNC_ORCHESTRATOR_TOKEN: ${{ secrets.UNISYNC_ORCHESTRATOR_TOKEN }}
+        run: |
+          tid=$(python -m tools.summon request --title "$TITLE" --agent "$AGENT" --run-url "$RUN_URL")
+          echo "task_id=${tid}" >> "$GITHUB_OUTPUT"
+          echo "Posted ${tid}"
+
+      - name: Claim it (sebastian)
+        id: claim
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+        run: python -m tools.summon claim --task-id "$TASK_ID" --agent "$AGENT"
+
+      - name: Run sebastian demo
+        id: run
+        run: |
+          set +e
+          sebastian demo -w "$RUNNER_TEMP/ws" > "$RUNNER_TEMP/out.txt" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/out.txt"
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the outcome (sebastian)
+        if: always() && steps.claim.outcome == 'success'
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          CODE: ${{ steps.run.outputs.code }}
+          UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+        run: |
+          python -m tools.summon finish --task-id "$TASK_ID" --agent "$AGENT" \
+            --exit-code "${CODE:-1}" --log "$RUNNER_TEMP/out.txt" --run-url "$RUN_URL"
+
+      - name: Summary
+        if: always()
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          {
+            echo "### Summon: ${AGENT}"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Task | \`${TASK_ID:-not posted}\` |"
+            echo "| Exit code | ${CODE:-n/a} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$CODE" && "$CODE" != "0" ]]; then exit 1; fi

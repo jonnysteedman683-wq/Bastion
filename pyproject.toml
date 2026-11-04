@@ -18,4 +18,4 @@ select = ["E", "F", "W", "B", "UP", "I", "N", "S", "SIM", "RUF"]
 [tool.mypy]
 strict = true
 python_version = "3.13"
-files = ["tools", "services/hello/app.py"]
+files = ["tools", "api", "services/hello/app.py"]

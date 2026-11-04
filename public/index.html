@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Bastion Command Centre</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" integrity="sha512-vc58qvvBdrDR4etbxMdlTt4GBQk1qjvyORR2nrsPsFPyrs+/u5c3+1Ct6upOgdZoIl7eq6k3a1UPDSNAQi/32A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  /* Layout: one column of cards inside a gutter that grows with the width. */
+  :root {
+    color-scheme: light;
+    --color-bg: #f6f6f3; --color-panel: #ffffff; --color-fg: #16181d; --color-fg-muted: #5f6470;
+    --color-border-line: #e3e3de; --color-ok: #1d8a4e; --color-warn: #b7791f; --color-bad: #c2362f;
+    --cds-chart-muted: #a7abb3; --cds-chart-grid: #d9d9d3;
+    --font-anthropic-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-anthropic-serif: "Fraunces", Georgia, "Times New Roman", serif;
+    --cds-font-size-caption: .8125rem; --cds-font-size-body: .9375rem; --cds-font-size-heading: 1.0625rem; --cds-font-size-title: 1.75rem;
+    --cds-font-weight-medium: 500; --cds-radius: 10px;
+    --cds-gap-xs: .35rem; --cds-gap-sm: .6rem; --cds-gap-md: 1rem; --cds-gap-lg: 1.5rem;
+    --cds-pad-xs: .3rem; --cds-pad-sm: .55rem; --cds-pad-md: .9rem; --cds-pad-lg: 1.25rem;
+    --cds-dur-slow: .28s; --cds-ease-out: cubic-bezier(.2, .8, .2, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --color-bg: #0e1014; --color-panel: #161920; --color-fg: #eceef2; --color-fg-muted: #9aa0ab;
+      --color-border-line: #262a33; --color-ok: #3ccf7e; --color-warn: #e3a33a; --color-bad: #ef5a52;
+      --cds-chart-muted: #4b505b; --cds-chart-grid: #2b2f38;
+    }
+  }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); }
+  body { font-family: var(--font-anthropic-sans); -webkit-font-smoothing: antialiased; }
+  .bx-page { max-width: 1240px; margin-inline: auto; padding-block: max(1.5rem, env(safe-area-inset-top)) 3rem;
+    padding-left: max(16px, env(safe-area-inset-left), 3vw); padding-right: max(16px, env(safe-area-inset-right), 3vw); }
+  .bx-gate { max-width: 26rem; margin: 18vh auto 0; padding: var(--cds-pad-lg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); background: var(--color-panel); display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+  .bx-gate h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 2rem; margin: 0; }
+  .bx-gate p { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-body); }
+  .bx-gate input { font: inherit; padding: var(--cds-pad-sm); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-bg); color: var(--color-fg); }
+  .bx-gate button, .bx-signout { font: inherit; font-weight: 500; padding: var(--cds-pad-sm) var(--cds-pad-md); border-radius: var(--cds-radius); border: 1px solid var(--color-fg); background: var(--color-fg); color: var(--color-bg); cursor: pointer; }
+  .bx-signout { background: transparent; color: var(--color-fg-muted); border-color: var(--color-border-line); font-size: var(--cds-font-size-caption); padding: var(--cds-pad-xs) var(--cds-pad-sm); justify-self: end; }
+  .bx-gate-error { color: var(--color-bad) !important; }
+
+  .bx { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+  .bx-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--cds-gap-sm) var(--cds-gap-lg); align-items: end; }
+  .bx-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: clamp(2rem, 5vw, 3.25rem); line-height: 1; letter-spacing: -.02em; margin: 0; }
+  .bx-sub { margin: var(--cds-gap-xs) 0 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-body); max-width: 60ch; }
+  .bx-live { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); white-space: nowrap; padding: var(--cds-pad-xs) var(--cds-pad-sm); border: 1px solid var(--color-border-line); border-radius: 999px; background: var(--color-panel); }
+  .bx-live b { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); font-variant-numeric: tabular-nums; }
+  .bx-pulse { position: relative; width: .5rem; height: .5rem; border-radius: 50%; background: var(--color-ok); }
+  .bx-run { grid-column: 1 / -1; margin: 0; display: flex; align-items: center; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-body); }
+  .bx-run-halted { color: var(--color-bad); font-weight: var(--cds-font-weight-medium); }
+  .bx code, .bx pre, .bx-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .bx code { font-size: .92em; }
+
+  .bx-dock { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--cds-gap-md); }
+  .bx-summon { display: flex; flex-direction: column; gap: var(--cds-gap-xs); padding: var(--cds-pad-md) var(--cds-pad-lg); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-panel); color: var(--color-fg); text-decoration: none; transition: transform var(--cds-dur-slow) var(--cds-ease-out), border-color var(--cds-dur-slow); }
+  .bx-summon:hover { transform: translateY(-2px); border-color: var(--color-fg-muted); }
+  .bx-summon:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+  .bx-summon-k { display: flex; align-items: center; justify-content: space-between; gap: var(--cds-gap-sm); font-weight: var(--cds-font-weight-medium); font-size: var(--cds-font-size-heading); }
+  .bx-summon-k span:last-child { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-weight: 400; }
+  .bx-summon-d { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .bx-summon-primary { background: var(--color-fg); color: var(--color-bg); border-color: var(--color-fg); }
+  .bx-summon-primary .bx-summon-d, .bx-summon-primary .bx-summon-k span:last-child { color: var(--color-bg); opacity: .75; }
+  .bx-dock-note { grid-column: 1 / -1; margin: 0; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .bx-dock-note b { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+
+  .bx-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+  .bx-card h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+  .bx-note { margin: 0; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .bx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: var(--cds-gap-md); align-items: start; }
+  .bx-wide { grid-column: 1 / -1; }
+
+  .bx-flight { display: flex; flex-direction: column; gap: var(--cds-gap-md); min-height: 6rem; }
+  .bx-job { display: flex; flex-direction: column; gap: var(--cds-gap-xs); }
+  .bx-job-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--cds-gap-xs) var(--cds-gap-sm); }
+  .bx-job-title { font-weight: var(--cds-font-weight-medium); }
+  .bx-job-meta { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+  .bx-bar { position: relative; height: .5rem; border-radius: 999px; background: var(--color-border-line); overflow: hidden; }
+  .bx-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--bx-c, var(--color-fg)); transition: width var(--cds-dur-slow) var(--cds-ease-out); }
+  .bx-bar-live .bx-bar-fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); background-size: 50% 100%; background-repeat: no-repeat; animation: bx-sheen 1.4s linear infinite; }
+  .bx-stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--cds-gap-xs); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .bx-stage { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+  .bx-stage[data-on="1"] { color: var(--color-fg); }
+  .bx-stage::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; border: 1px solid currentColor; }
+  .bx-stage[data-on="1"]::before { background: currentColor; }
+
+  .bx-map { position: relative; min-height: 20rem; }
+  .bx-map svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+  .bx-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: var(--cds-gap-md); }
+  .bx-tile { padding: var(--cds-pad-md); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); display: flex; flex-direction: column; gap: 2px; }
+  .bx-tile-label { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .bx-tile-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; min-height: 1.25em; }
+  .bx-tile-bad .bx-tile-value { color: var(--color-bad); }
+  .bx-tile-ok .bx-tile-value { color: var(--color-ok); }
+
+  .bx-scroll { overflow: auto; max-height: 30rem; min-height: 5rem; }
+  .bx-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-body); font-variant-numeric: tabular-nums; }
+  .bx-table th { text-align: left; font-weight: var(--cds-font-weight-medium); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); position: sticky; top: 0; background: var(--color-panel); z-index: 1; }
+  .bx-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: top; }
+  .bx-table tr.bx-row { cursor: pointer; }
+  .bx-table tr.bx-row:hover td { background: color-mix(in srgb, var(--color-fg) 4%, transparent); }
+  .bx-table tr.bx-row td:first-child::before { content: "▸"; display: inline-block; width: 1em; color: var(--color-fg-muted); transition: transform var(--cds-dur-slow); }
+  .bx-table tr.bx-row[aria-expanded="true"] td:first-child::before { transform: rotate(90deg); }
+  .bx-detail td { background: color-mix(in srgb, var(--color-fg) 3%, transparent); }
+  .bx-detail-box { display: flex; flex-direction: column; gap: var(--cds-gap-xs); padding: var(--cds-pad-xs) 0; }
+  .bx-detail-line { font-size: var(--cds-font-size-body); }
+  .bx-detail pre { margin: 0; padding: var(--cds-pad-sm); max-height: 16rem; overflow: auto; font-size: var(--cds-font-size-caption); line-height: 1.5; white-space: pre-wrap; word-break: break-word; border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-bg); }
+  .bx-detail a { color: inherit; font-size: var(--cds-font-size-caption); }
+  .bx-muted { color: var(--color-fg-muted); }
+  .bx-num { text-align: right; }
+  .bx-kind { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--cds-font-size-caption); white-space: nowrap; }
+  .bx-pill { display: inline-block; padding: 0 var(--cds-pad-xs); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); font-size: var(--cds-font-size-caption); white-space: nowrap; }
+  .bx-pill[data-s="done"] { color: var(--color-ok); border-color: currentColor; }
+  .bx-pill[data-s="failed"], .bx-pill[data-s="rejected"] { color: var(--color-bad); border-color: currentColor; }
+  .bx-pill[data-s="awaiting_approval"] { color: var(--color-warn); border-color: currentColor; font-weight: var(--cds-font-weight-medium); }
+  .bx-pill[data-s="claimed"], .bx-pill[data-s="open"], .bx-pill[data-s="approved"] { color: var(--color-fg); border-color: currentColor; }
+  .bx-dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: var(--cds-chart-muted); flex: none; }
+  .bx-dot[data-s="active"] { background: var(--color-ok); }
+  .bx-dot[data-s="idle"] { background: var(--color-warn); }
+  .bx-dot-bad { background: var(--color-bad); }
+  .bx-status { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); white-space: nowrap; }
+  .bx-empty { margin: 0; padding: var(--cds-pad-sm) 0; color: var(--color-fg-muted); }
+  .bx-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); word-break: break-all; }
+  .bx-fail { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); min-height: 5rem; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .bx-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+  @media (max-width: 40rem) { .bx-hide-narrow { display: none; } .bx-top { grid-template-columns: 1fr; } }
+  [data-dash-source-state=refreshing] { transition: opacity var(--cds-dur-slow); }
+  [data-dash-source-state=empty] { color: transparent; }
+  @keyframes bx-sheen { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+  @keyframes bx-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-ok) 60%, transparent); } 100% { box-shadow: 0 0 0 .6rem transparent; } }
+  @keyframes bx-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .bx-pulse { animation: bx-ping 1.8s var(--cds-ease-out) infinite; }
+    .bx-job, .bx-detail-box { animation: bx-in var(--cds-dur-slow) var(--cds-ease-out); }
+  }
+  @media (prefers-reduced-motion: reduce) { .bx-bar-live .bx-bar-fill::after { animation: none; } }
+
+</style>
+</head>
+<body>
+<form class="bx-gate" id="gate" hidden>
+  <h1>Bastion</h1>
+  <p>Enter the dashboard passphrase (the <code>BASTION_DASH_TOKEN</code> you set in Vercel). It stays in this browser.</p>
+  <input id="passphrase" type="password" autocomplete="current-password" aria-label="Passphrase" required>
+  <button type="submit">Open the command centre</button>
+  <p class="bx-gate-error" id="gate-error" hidden></p>
+</form>
+<main class="bx-page" id="app" hidden>
+
+<script>
+  // A small stand-in for the claude.ai Dashboard runtime, so the same page code runs here:
+  // one call to /api/data loads all five datasets; draws re-run on every load.
+  (() => {
+    const KEY = 'bastion.passphrase';
+    const read = () => { try { return localStorage.getItem(KEY) || ''; } catch { return ''; } };
+    const write = (v) => { try { if (v) localStorage.setItem(KEY, v); else localStorage.removeItem(KEY); } catch { /* private mode */ } };
+    const state = {};
+    const draws = new Map();
+    const onData = [];
+    let params = {};
+    let inflight = null;
+    const gate = document.getElementById('gate');
+    const app = document.getElementById('app');
+    const err = document.getElementById('gate-error');
+
+    const runDraw = (name) => {
+      const fn = draws.get(name);
+      if (!fn) return;
+      for (const el of document.querySelectorAll(`[data-draw="${name}"]`)) {
+        try { fn(el); } catch (e) { console.error('draw', name, e); }
+      }
+    };
+    const redrawAll = () => { for (const f of onData) { try { f(); } catch (e) { console.error(e); } } for (const n of draws.keys()) runDraw(n); };
+
+    async function load() {
+      if (inflight) return inflight;
+      for (const k of Object.keys(state)) state[k].refreshing = true;
+      inflight = (async () => {
+        try {
+          const res = await fetch('/api/data', { headers: { Authorization: 'Bearer ' + read() }, cache: 'no-store' });
+          if (res.status === 401 || res.status === 503) {
+            const body = await res.json().catch(() => ({}));
+            showGate(body.error || 'The passphrase was not accepted.');
+            return;
+          }
+          const body = await res.json();
+          if (!res.ok) throw new Error(body.error || res.statusText);
+          for (const [k, v] of Object.entries(body)) state[k] = { status: v.status, data: v.data || [], message: v.message, refreshing: false };
+        } catch (e) {
+          for (const k of ['stats', 'roster', 'feed', 'tasks', 'control']) state[k] = { status: 'error', data: (state[k] || {}).data || [], message: String(e), refreshing: false };
+        } finally {
+          inflight = null;
+          redrawAll();
+        }
+      })();
+      return inflight;
+    }
+
+    function showGate(message) {
+      app.hidden = true; gate.hidden = false;
+      err.hidden = !message; err.textContent = message || '';
+      document.getElementById('passphrase').focus();
+    }
+    gate.addEventListener('submit', (e) => {
+      e.preventDefault();
+      write(document.getElementById('passphrase').value.trim());
+      gate.hidden = true; app.hidden = false; load();
+    });
+
+    window.dash = {
+      data: (id) => state[id] || { status: 'loading', data: [], refreshing: false },
+      draw: (name, fn) => { if (fn) draws.set(name, fn); runDraw(name); },
+      onData: (fn) => { onData.push(fn); try { fn(); } catch (e) { console.error(e); } },
+      setParams: (p) => { params = { ...params, ...p }; load(); },
+      params: () => params,
+      resetParams: () => { params = {}; },
+      refresh: () => load(),
+      loader: () => {},
+      colors: ['#4f6bff', '#c157d6', '#1aa39a', '#e2733a', '#7a8bff', '#d6467a', '#5aa83a', '#a07a2f'],
+    };
+    window.bxSignOut = () => { write(''); showGate(''); };
+
+    if (read()) { app.hidden = false; queueMicrotask(load); } else { showGate(''); }
+    window.addEventListener('resize', () => runDraw('map'));
+  })();
+</script>
+  <div style="display:grid"><button type="button" class="bx-signout" onclick="bxSignOut()">Sign out</button></div>
+
+
+<div class="bx">
+  <header class="bx-top" id="overview">
+    <div>
+      <h1 class="bx-title">Bastion</h1>
+      <p class="bx-sub">Command centre for the fleet. Every number is live from the UniSync ledger.</p>
+    </div>
+    <div class="bx-live" role="status"><span class="bx-pulse" aria-hidden="true"></span><span>Live</span><span>· ledger #<b data-draw="head" data-source="stats" data-field="ledger_head" data-row="0">—</b></span><span>· refreshed <b data-draw="refreshedAgo">—</b></span></div>
+    <p class="bx-run bx-run-ok" hidden><span class="bx-dot" data-s="active"></span> Fleet running. No halt is in force.</p>
+    <p class="bx-run bx-run-halted" hidden><span class="bx-dot bx-dot-bad"></span> Fleet halted by jonny: <b data-draw="haltReason" data-source="control" data-field="reason" data-row="0">—</b>. Run <code>linx resume</code> on your PC to lift it.</p>
+    <span data-draw="haltToggle" data-source="control"></span>
+  </header>
+
+  <section class="bx-dock" id="summon" aria-label="Summon an agent">
+    <a class="bx-summon bx-summon-primary" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon-demo.yml">
+      <span class="bx-summon-k"><span>Summon: Demo</span><span>~10 s</span></span>
+      <span class="bx-summon-d">Sebastian writes a file, then proves it is right.</span>
+    </a>
+    <a class="bx-summon" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon-evals.yml">
+      <span class="bx-summon-k"><span>Summon: Eval suite</span><span>~1 min</span></span>
+      <span class="bx-summon-d">Sebastian's capability and prompt-injection tests, offline.</span>
+    </a>
+    <a class="bx-summon" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon.yml">
+      <span class="bx-summon-k"><span>Summon: Custom</span><span>your title</span></span>
+      <span class="bx-summon-d">Name the task yourself, then pick what Sebastian runs.</span>
+    </a>
+    <p class="bx-dock-note">Each opens GitHub: press <b>Run workflow</b>. Progress shows up below within seconds. No API key, $0.</p>
+  </section>
+
+  <section class="bx-card bx-wide" id="progress">
+    <h2>Live progress</h2>
+    <p class="bx-note">Tasks in flight, or the latest one when the fleet is idle. Refreshes every 5 s while something runs.</p>
+    <div class="bx-flight" data-draw="flight" data-source="tasks">—</div>
+  </section>
+
+  <div class="bx-grid">
+    <section class="bx-card" id="map">
+      <h2>Systems map</h2>
+      <p class="bx-note">Every agent around the ledger. Rings glow for agents that wrote in the last hour; arcs show who hands work to whom.</p>
+      <div class="bx-map" data-draw="map" data-source="roster tasks"></div>
+    </section>
+
+    <section class="bx-card" id="pulse">
+      <h2>Fleet pulse</h2>
+      <p class="bx-note">Last 7 days unless stated.</p>
+      <div class="bx-tiles">
+        <div class="bx-tile"><span class="bx-tile-label">Agents on the roster</span><span class="bx-tile-value" data-draw="tAgents" data-source="stats" data-field="agents" data-row="0">—</span></div>
+        <div class="bx-tile"><span class="bx-tile-label">Active, last 24 h</span><span class="bx-tile-value" data-draw="tActive" data-source="stats" data-field="active_24h" data-row="0">—</span></div>
+        <div class="bx-tile bx-tile-ok"><span class="bx-tile-label">Tasks done</span><span class="bx-tile-value" data-draw="tDone" data-source="stats" data-field="done_7d" data-row="0">—</span></div>
+        <div class="bx-tile bx-tile-bad"><span class="bx-tile-label">Tasks failed</span><span class="bx-tile-value" data-draw="tFailed" data-source="stats" data-field="failures_7d" data-row="0">—</span></div>
+        <div class="bx-tile"><span class="bx-tile-label">Ledger events</span><span class="bx-tile-value" data-draw="tEvents" data-source="stats" data-field="events_7d" data-row="0">—</span></div>
+        <div class="bx-tile"><span class="bx-tile-label">Last event</span><span class="bx-tile-value" data-draw="tLast" data-source="stats">—</span></div>
+      </div>
+      <h2>Waiting on you</h2>
+      <p class="bx-note">Decide on your PC (or the APPROVE_LINX menu) so your owner key signs it.</p>
+      <p class="bx-empty bx-empty-approvals" hidden>Nothing is waiting on you.</p>
+      <table class="bx-table" data-source="tasks" data-row-key="task_id">
+        <thead><tr><th data-field="title">Task</th><th data-field="agent">For</th><th data-field="task_id">Task id</th></tr></thead>
+        <tbody data-draw="approvalRows"></tbody>
+      </table>
+      <span data-draw="approvalState"></span>
+    </section>
+
+    <section class="bx-card bx-wide" id="tasks">
+      <h2>Tasks</h2>
+      <p class="bx-note">Tap a task to see what the agent said and its output. Status follows Lestinxor's rules.</p>
+      <div class="bx-scroll">
+        <table class="bx-table" data-source="tasks" data-row-key="task_id">
+          <thead><tr>
+            <th data-field="title">Task</th>
+            <th data-field="agent">Agent</th>
+            <th data-field="mode" class="bx-hide-narrow">Mode</th>
+            <th data-field="status">Status</th>
+            <th data-field="updated_ts" class="bx-hide-narrow">Updated</th>
+          </tr></thead>
+          <tbody data-draw="taskRows"></tbody>
+        </table>
+        <div class="bx-fail bx-fail-tasks" hidden>Failed to load</div>
+      </div>
+    </section>
+
+    <section class="bx-card" id="roster">
+      <h2>Roster</h2>
+      <p class="bx-note">Green: wrote in the last hour. Amber: the last day. Grey: quiet longer, or never.</p>
+      <div class="bx-scroll">
+        <table class="bx-table" data-source="roster" data-row-key="name">
+          <thead><tr>
+            <th data-field="name">Agent</th>
+            <th data-field="role" class="bx-hide-narrow">Role</th>
+            <th data-field="status">Status</th>
+            <th data-field="events" class="bx-num">Events</th>
+          </tr></thead>
+          <tbody data-draw="rosterRows"></tbody>
+        </table>
+        <div class="bx-fail bx-fail-roster" hidden>Failed to load</div>
+      </div>
+    </section>
+
+    <section class="bx-card" id="feed">
+      <h2>Ledger feed</h2>
+      <p class="bx-note">The latest 200 events, newest first. Times in UTC.</p>
+      <div class="bx-scroll">
+        <table class="bx-table" data-source="feed" data-row-key="id">
+          <thead><tr>
+            <th data-field="ts">When</th>
+            <th data-field="agent">Agent</th>
+            <th data-field="kind">Kind</th>
+            <th data-field="summary" class="bx-hide-narrow">Summary</th>
+          </tr></thead>
+          <tbody data-draw="feedRows"></tbody>
+        </table>
+        <div class="bx-fail bx-fail-feed" hidden>Failed to load</div>
+      </div>
+      <span data-draw="failToggles"></span>
+    </section>
+  </div>
+</div>
+
+<script>
+  const SOURCES = ['stats', 'roster', 'feed', 'tasks', 'control'];
+  const IN_FLIGHT = new Set(['open', 'approved', 'claimed', 'awaiting_approval']);
+  const EXPECT_S = { demo: 15, evals: 90 };
+  const fmtWhen = d3.utcFormat('%-d %b, %H:%M');
+  const num = d3.format(',');
+  window.bxOpen = window.bxOpen || new Set();
+  window.bxLastOk = window.bxLastOk || 0;
+
+  const ago = (iso) => {
+    if (!iso) return 'never';
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return Math.floor(s) + ' s ago';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  };
+  const secs = (a, b) => Math.max(0, Math.round((new Date(b || Date.now()) - new Date(a)) / 1000));
+  const dur = (s) => (s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + (s % 60) + ' s');
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const cell = (tr, text, cls) => { const td = el('td', cls, text); tr.appendChild(td); return td; };
+  const rows = (id) => { const d = dash.data(id); return d.status === 'ok' ? d.data : null; };
+
+  // Auto-refresh: a coarse tick re-runs every query; 5 s while a task is in flight, else 15 s.
+  const busy = () => (rows('tasks') || []).some((t) => IN_FLIGHT.has(t.status));
+  const tick = () => dash.setParams({ tick: Math.floor(Date.now() / 5000) });
+  let lastTick = Date.now();
+  window.setInterval(() => {
+    const every = busy() ? 5000 : 15000;
+    if (document.visibilityState === 'visible' && Date.now() - lastTick >= every) { lastTick = Date.now(); tick(); }
+    dash.draw('refreshedAgo');
+    if (busy()) dash.draw('flight');
+  }, 1000);
+  dash.onData(() => {
+    if (SOURCES.every((id) => dash.data(id).status === 'ok' && !dash.data(id).refreshing)) window.bxLastOk = Date.now();
+  });
+
+  dash.draw('refreshedAgo', (n) => { n.textContent = window.bxLastOk ? Math.floor((Date.now() - window.bxLastOk) / 1000) + ' s ago' : '—'; });
+  dash.draw('head', (n) => { const s = rows('stats'); n.textContent = s && s[0] ? String(s[0].ledger_head) : '—'; });
+
+  dash.draw('haltToggle', () => {
+    const c = rows('control');
+    const halted = !!(c && c[0] && c[0].halted === true);
+    for (const n of document.querySelectorAll('.bx-run-ok')) n.hidden = !c || halted;
+    for (const n of document.querySelectorAll('.bx-run-halted')) n.hidden = !halted;
+  });
+  dash.draw('haltReason', (n) => { const c = rows('control'); n.textContent = c && c[0] ? (c[0].reason || 'no reason given') : '—'; });
+
+  const stat = (field, fmt) => (n) => { const s = rows('stats'); n.textContent = s && s[0] ? fmt(s[0][field]) : '—'; };
+  dash.draw('tAgents', stat('agents', num));
+  dash.draw('tActive', stat('active_24h', num));
+  dash.draw('tDone', stat('done_7d', num));
+  dash.draw('tFailed', stat('failures_7d', num));
+  dash.draw('tEvents', stat('events_7d', num));
+  dash.draw('tLast', stat('last_event', ago));
+
+  // Live progress: three stages, a bar that fills as the run goes, a sheen while it is moving.
+  const stageOf = (t) => {
+    if (t.status === 'done') return { pct: 100, c: 'var(--color-ok)', live: false, label: 'Done' };
+    if (t.status === 'failed' || t.status === 'rejected') return { pct: 100, c: 'var(--color-bad)', live: false, label: t.status === 'failed' ? 'Failed' : 'Rejected' };
+    if (t.status === 'awaiting_approval') return { pct: 25, c: 'var(--color-warn)', live: false, label: 'Waiting on you' };
+    if (t.status === 'claimed') {
+      const exp = EXPECT_S[t.mode] || 60;
+      const p = Math.min(92, 40 + (secs(t.claimed_ts) / exp) * 52);
+      return { pct: p, c: dash.colors[0], live: true, label: 'Running' };
+    }
+    return { pct: 15, c: dash.colors[0], live: true, label: 'Queued' };
+  };
+  dash.draw('flight', (box) => {
+    const t = rows('tasks');
+    if (!t) { box.textContent = '—'; return; }
+    if (!t.length) { box.replaceChildren(el('p', 'bx-empty', 'No tasks yet. Press a Summon button above.')); return; }
+    const live = t.filter((r) => IN_FLIGHT.has(r.status));
+    const show = (live.length ? live : t.slice(0, 1)).slice(0, 4);
+    box.replaceChildren(...show.map((r) => {
+      const st = stageOf(r);
+      const job = el('div', 'bx-job');
+      const head = el('div', 'bx-job-head');
+      head.append(el('span', 'bx-job-title', r.title));
+      const pill = el('span', 'bx-pill', st.label); pill.dataset.s = r.status; head.append(pill);
+      const meta = r.finished_ts ? `${r.agent || ''} · ${r.mode || ''} · took ${dur(secs(r.requested_ts, r.finished_ts))} · ${ago(r.finished_ts)}`
+        : `${r.agent || ''} · ${r.mode || ''} · ${dur(secs(r.requested_ts))} so far`;
+      head.append(el('span', 'bx-job-meta', meta));
+      const bar = el('div', 'bx-bar' + (st.live ? ' bx-bar-live' : ''));
+      bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100');
+      bar.setAttribute('aria-valuenow', String(Math.round(st.pct)));
+      const fill = el('div', 'bx-bar-fill'); fill.style.width = st.pct + '%'; fill.style.setProperty('--bx-c', st.c);
+      bar.append(fill);
+      const stages = el('div', 'bx-stages');
+      for (const [name, ts] of [['Requested', r.requested_ts], ['Claimed', r.claimed_ts], [r.status === 'failed' ? 'Failed' : 'Finished', r.finished_ts]]) {
+        const s = el('span', 'bx-stage', ts ? `${name} ${d3.utcFormat('%H:%M:%S')(new Date(ts))}` : name);
+        s.dataset.on = ts ? '1' : '0';
+        stages.append(s);
+      }
+      job.append(head, bar, stages);
+      if (r.detail) job.append(el('span', 'bx-job-meta', r.detail));
+      return job;
+    }));
+  });
+
+  // Systems map: agents on a ring around the ledger; arcs for who requests work from whom.
+  dash.draw('map', (box) => {
+    const ro = rows('roster');
+    const tk = rows('tasks') || [];
+    if (!ro) { box.replaceChildren(); return; }
+    const W = Math.max(300, box.clientWidth), H = Math.round(Math.min(420, Math.max(300, W * 0.72)));
+    const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 56;
+    const pos = new Map(ro.map((a, i) => {
+      const ang = -Math.PI / 2 + (i / ro.length) * Math.PI * 2;
+      return [a.name, { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang), a }];
+    }));
+    const color = (s) => s === 'active' ? 'var(--color-ok)' : s === 'idle' ? 'var(--color-warn)' : 'var(--cds-chart-muted)';
+    const svg = d3.create('svg').attr('viewBox', `0 0 ${W} ${H}`).attr('width', '100%').attr('role', 'img')
+      .attr('aria-label', 'Map of agents around the UniSync ledger');
+    const defs = svg.append('defs');
+    const glow = defs.append('filter').attr('id', 'bx-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+    glow.append('feGaussianBlur').attr('stdDeviation', 4).attr('result', 'b');
+    const mg = glow.append('feMerge'); mg.append('feMergeNode').attr('in', 'b'); mg.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Spokes to the ledger.
+    for (const { x, y, a } of pos.values()) {
+      svg.append('line').attr('x1', cx).attr('y1', cy).attr('x2', x).attr('y2', y)
+        .attr('stroke', a.status === 'silent' ? 'var(--cds-chart-grid)' : color(a.status))
+        .attr('stroke-width', a.status === 'silent' ? 1 : 1.5).attr('stroke-dasharray', a.status === 'silent' ? '3 4' : null);
+    }
+    // Work handed between agents (requested_by -> agent), thicker with more tasks.
+    const flows = d3.rollups(tk.filter((t) => pos.has(t.requested_by) && pos.has(t.agent) && t.requested_by !== t.agent),
+      (v) => ({ n: v.length, live: v.some((t) => IN_FLIGHT.has(t.status)) }), (t) => t.requested_by + '>' + t.agent);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    for (const [key, f] of flows) {
+      const [a, b] = key.split('>');
+      const p = pos.get(a), q = pos.get(b);
+      const mx = (p.x + q.x) / 2 + (cy - (p.y + q.y) / 2) * 0.35, my = (p.y + q.y) / 2 - (cx - (p.x + q.x) / 2) * 0.35;
+      const d = `M${p.x},${p.y} Q${mx},${my} ${q.x},${q.y}`;
+      const path = svg.append('path').attr('d', d).attr('fill', 'none').attr('stroke', dash.colors[1])
+        .attr('stroke-width', Math.min(6, 1.5 + Math.log2(f.n + 1))).attr('stroke-linecap', 'round').attr('opacity', 0.85);
+      const id = 'bx-flow-' + key.replace(/[^a-z0-9]/gi, '');
+      path.attr('id', id);
+      svg.append('text').attr('font-size', 11).attr('fill', 'var(--color-fg-muted)').attr('text-anchor', 'middle')
+        .attr('x', mx).attr('y', my).attr('paint-order', 'stroke').attr('stroke', 'var(--color-panel)').attr('stroke-width', 4)
+        .text(`${f.n} task${f.n === 1 ? '' : 's'}`);
+      if (!reduce) {
+        const dot = svg.append('circle').attr('r', f.live ? 4.5 : 3).attr('fill', dash.colors[1]);
+        dot.append('animateMotion').attr('dur', f.live ? '1.6s' : '4s').attr('repeatCount', 'indefinite').append('mpath').attr('href', '#' + id);
+      }
+    }
+    // The ledger at the centre.
+    svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 30).attr('fill', 'var(--color-panel)').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.5);
+    svg.append('text').attr('x', cx).attr('y', cy - 2).attr('text-anchor', 'middle').attr('font-size', 11).attr('font-weight', 600).attr('fill', 'var(--color-fg)').text('UniSync');
+    svg.append('text').attr('x', cx).attr('y', cy + 12).attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', 'var(--color-fg-muted)').text('ledger');
+    // Agents.
+    for (const { x, y, a } of pos.values()) {
+      const g = svg.append('g');
+      g.append('title').text(`${a.name} · ${a.role} · ${a.events} events · last seen ${ago(a.last_seen)}`);
+      g.append('circle').attr('cx', x).attr('cy', y).attr('r', 16).attr('fill', 'var(--color-panel)')
+        .attr('stroke', color(a.status)).attr('stroke-width', a.status === 'silent' ? 1.5 : 3)
+        .attr('filter', a.status === 'active' ? 'url(#bx-glow)' : null);
+      g.append('text').attr('x', x).attr('y', y + 4).attr('text-anchor', 'middle').attr('font-size', 11).attr('font-weight', 600)
+        .attr('fill', 'var(--color-fg)').text(a.name.slice(0, 2).toUpperCase());
+      const below = y >= cy;
+      g.append('text').attr('x', x).attr('y', below ? y + 32 : y - 38).attr('text-anchor', 'middle').attr('font-size', 12)
+        .attr('fill', 'var(--color-fg)').text(a.name);
+      g.append('text').attr('x', x).attr('y', below ? y + 46 : y - 24).attr('text-anchor', 'middle').attr('font-size', 10)
+        .attr('fill', 'var(--color-fg-muted)').text(a.role);
+    }
+    box.replaceChildren(svg.node());
+  });
+
+  // Waiting on you.
+  const waiting = () => (rows('tasks') || []).filter((r) => r.status === 'awaiting_approval');
+  dash.draw('approvalRows', (tbody) => {
+    tbody.replaceChildren(...waiting().map((r) => {
+      const tr = el('tr'); tr.dataset.key = r.task_id;
+      cell(tr, r.title); cell(tr, r.agent || '–', 'bx-muted'); cell(tr, r.task_id, 'bx-id');
+      return tr;
+    }));
+  });
+  dash.draw('approvalState', () => {
+    for (const n of document.querySelectorAll('.bx-empty-approvals')) n.hidden = !rows('tasks') || waiting().length > 0;
+  });
+
+  // Tasks, each expandable to its detail, output and run.
+  dash.draw('taskRows', (tbody) => {
+    const t = rows('tasks');
+    if (!t) { tbody.replaceChildren(); return; }
+    const out = [];
+    for (const r of t) {
+      const tr = el('tr', 'bx-row'); tr.dataset.key = r.task_id;
+      const open = window.bxOpen.has(r.task_id);
+      tr.setAttribute('aria-expanded', String(open)); tr.tabIndex = 0;
+      cell(tr, r.title).title = r.task_id;
+      cell(tr, r.agent || '–', 'bx-muted');
+      cell(tr, r.mode || '–', 'bx-muted bx-hide-narrow');
+      const st = cell(tr, ''); const pill = el('span', 'bx-pill', r.status); pill.dataset.s = r.status; st.append(pill);
+      cell(tr, r.updated_ts ? fmtWhen(new Date(r.updated_ts)) : '–', 'bx-muted bx-hide-narrow');
+      const toggle = () => { if (window.bxOpen.has(r.task_id)) window.bxOpen.delete(r.task_id); else window.bxOpen.add(r.task_id); dash.draw('taskRows'); };
+      tr.addEventListener('click', toggle);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      out.push(tr);
+      if (open) {
+        const dr = el('tr', 'bx-detail'); dr.dataset.key = r.task_id;
+        const td = el('td'); td.colSpan = 5;
+        const boxd = el('div', 'bx-detail-box');
+        boxd.append(el('span', 'bx-detail-line', r.detail ? (r.status === 'failed' ? 'Why it failed: ' : 'Result: ') + r.detail : 'No result yet.'));
+        boxd.append(el('span', 'bx-job-meta', `Requested by ${r.requested_by || '–'} · ${r.requested_ts ? fmtWhen(new Date(r.requested_ts)) : '–'}` +
+          (r.finished_ts ? ` · took ${dur(secs(r.requested_ts, r.finished_ts))}` : '')));
+        boxd.append(el('pre', '', r.output || 'No output was recorded for this task (older tasks predate output capture).'));
+        if (r.run_url && /^https:\/\/github\.com\//.test(r.run_url)) {
+          const a = el('a', '', 'Open the run on GitHub ↗'); a.href = r.run_url; a.target = '_blank'; a.rel = 'noopener';
+          boxd.append(a);
+        }
+        td.append(boxd); dr.append(td); out.push(dr);
+      }
+    }
+    tbody.replaceChildren(...out);
+  });
+
+  dash.draw('rosterRows', (tbody) => {
+    const ro = rows('roster');
+    if (!ro) { tbody.replaceChildren(); return; }
+    tbody.replaceChildren(...ro.map((r) => {
+      const tr = el('tr'); tr.dataset.key = r.name;
+      cell(tr, r.name); cell(tr, r.role, 'bx-muted bx-hide-narrow');
+      const st = cell(tr, ''); const w = el('span', 'bx-status'); const dot = el('span', 'bx-dot'); dot.dataset.s = r.status;
+      w.append(dot, el('span', '', r.status)); st.append(w);
+      cell(tr, num(r.events), 'bx-num');
+      return tr;
+    }));
+  });
+
+  dash.draw('feedRows', (tbody) => {
+    const f = rows('feed');
+    if (!f) { tbody.replaceChildren(); return; }
+    tbody.replaceChildren(...f.map((r) => {
+      const tr = el('tr'); tr.dataset.key = String(r.id);
+      const w = cell(tr, fmtWhen(new Date(r.ts)), 'bx-muted'); w.title = r.ts;
+      cell(tr, r.agent); cell(tr, r.kind, 'bx-kind'); cell(tr, r.summary, 'bx-hide-narrow');
+      return tr;
+    }));
+  });
+
+  dash.draw('failToggles', () => {
+    for (const id of ['tasks', 'roster', 'feed']) {
+      for (const n of document.querySelectorAll('.bx-fail-' + id)) n.hidden = dash.data(id).status !== 'error';
+    }
+  });
+</script>
+
+</main>
+</body>
+</html>

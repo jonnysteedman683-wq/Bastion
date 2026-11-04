@@ -54,6 +54,11 @@ class TaskIdTest(unittest.TestCase):
 
 
 class RequestTest(unittest.TestCase):
+    def test_mode_is_recorded_when_given(self) -> None:
+        ledger = FakeLedger()
+        summon.request(ledger, "Run the evals", agent="sebastian", run_url="", mode="evals")
+        self.assertEqual(ledger.posts[0][3]["mode"], "evals")
+
     def test_posts_a_task_request_as_the_orchestrator(self) -> None:
         ledger = FakeLedger(["d" * 64])
         tid = summon.request(ledger, "Run the Sebastian demo", agent="sebastian", run_url="https://x/run/1")
@@ -84,7 +89,22 @@ class OutcomeTest(unittest.TestCase):
     def test_success_is_a_result_with_the_last_line(self) -> None:
         kind, body = summon.outcome(0, "step 1\nCompleted: hello.txt written\n\n", run_url="u")
         self.assertEqual(kind, "task.result")
-        self.assertEqual(body, {"summary": "Completed: hello.txt written", "exit_code": 0, "run_url": "u"})
+        self.assertEqual(
+            body,
+            {
+                "summary": "Completed: hello.txt written",
+                "exit_code": 0,
+                "run_url": "u",
+                "output": "step 1\nCompleted: hello.txt written",
+            },
+        )
+
+    def test_output_keeps_the_tail_and_is_bounded(self) -> None:
+        text = "\n".join(f"line {i}" for i in range(500))
+        out = summon.outcome(1, text, run_url="")[1]["output"]
+        self.assertTrue(out.endswith("line 499"))
+        self.assertLessEqual(len(out), summon.MAX_OUTPUT)
+        self.assertLessEqual(out.count("\n") + 1, summon.MAX_OUTPUT_LINES)
 
     def test_failure_is_task_failed_with_a_reason(self) -> None:
         kind, body = summon.outcome(2, "Traceback\nValueError: boom\n", run_url="u")

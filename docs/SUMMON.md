@@ -1,8 +1,16 @@
 # Summon
 
-Ask Sebastian to do something from the command centre (or Actions → **Summon** → **Run workflow**) and
-watch it move on the UniSync ledger. Costs $0 and needs no model API key: v0 runs `sebastian demo`,
-Sebastian's offline scripted check.
+Ask Sebastian to do something from the command centre and watch it move on the UniSync ledger.
+Costs $0 and needs no model API key. Each button is its own one-tap workflow:
+
+| Button | Workflow | What Sebastian runs |
+| --- | --- | --- |
+| Demo | `summon-demo.yml` | `sebastian demo`: a scripted run that writes and verifies `hello.txt` |
+| Eval suite | `summon-evals.yml` | `python -m sebastian.evals`: the offline capability and prompt-injection suite |
+| Custom | `summon.yml` | Your own title, then pick a mode |
+
+Results and failures carry the last 25 lines of output (at most 1,500 characters), so the command centre
+shows why a run failed.
 
 | Step | Who posts | Kind |
 | --- | --- | --- |

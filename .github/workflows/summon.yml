@@ -1,7 +1,13 @@
 # Summon: ask Sebastian to run a task, through the UniSync ledger, at $0 and with no model API key.
 #
 #   1. lestinxor (orchestrator) posts task.request with flow "bastion-summon", as LinX's nightly loop does
-#   2. sebastian claims it, runs `sebastian demo` (offline, scripted), and posts task.result or task.failed
+#   2. sebastian claims it, runs the mode's command, and posts task.result or task.failed with its output tail
+#
+# Modes (all offline, no API key):
+#   demo    `sebastian demo`: a scripted run that writes and verifies hello.txt
+#   evals   `python -m sebastian.evals`: Sebastian's offline capability and prompt-injection suite
+#
+# One-tap wrappers (summon-demo.yml, summon-evals.yml) call this workflow; it can also be run directly.
 #
 # Every post goes through the UniSync gateway with a token scoped to one agent and its allowed kinds.
 # The command centre and `linx log` show the task as it moves. Start it from Actions -> Summon -> Run.
@@ -16,9 +22,22 @@ on:
   workflow_dispatch:
     inputs:
       title:
-        description: What to ask Sebastian for (shown in the command centre)
+        description: What to call this summon (shown in the command centre)
         required: true
         default: Run the Sebastian demo
+      mode:
+        description: What Sebastian runs
+        type: choice
+        options: [demo, evals]
+        default: demo
+  workflow_call:
+    inputs:
+      title:
+        type: string
+        required: true
+      mode:
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -29,7 +48,7 @@ concurrency:
 
 jobs:
   summon:
-    name: Summon sebastian
+    name: Summon sebastian (${{ inputs.mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -38,6 +57,7 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
       SEBASTIAN_SHA: 098dc29c2fba8f77c2eeab168d803d14a2cb7391
+      MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,7 +89,7 @@ jobs:
           TITLE: ${{ inputs.title }}
           UNISYNC_ORCHESTRATOR_TOKEN: ${{ secrets.UNISYNC_ORCHESTRATOR_TOKEN }}
         run: |
-          tid=$(python -m tools.summon request --title "$TITLE" --agent "$AGENT" --run-url "$RUN_URL")
+          tid=$(python -m tools.summon request --title "$TITLE" --agent "$AGENT" --run-url "$RUN_URL" --mode "$MODE")
           echo "task_id=${tid}" >> "$GITHUB_OUTPUT"
           echo "Posted ${tid}"
 
@@ -80,12 +100,16 @@ jobs:
           UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
         run: python -m tools.summon claim --task-id "$TASK_ID" --agent "$AGENT"
 
-      - name: Run sebastian demo
+      - name: Run sebastian (${{ inputs.mode }})
         id: run
         run: |
           mkdir -p "$RUNNER_TEMP/ws"
           set +e
-          sebastian demo -w "$RUNNER_TEMP/ws" > "$RUNNER_TEMP/out.txt" 2>&1
+          case "$MODE" in
+            demo)  sebastian demo -w "$RUNNER_TEMP/ws" > "$RUNNER_TEMP/out.txt" 2>&1 ;;
+            evals) python -m sebastian.evals > "$RUNNER_TEMP/out.txt" 2>&1 ;;
+            *)     echo "unknown mode: $MODE" > "$RUNNER_TEMP/out.txt"; false ;;
+          esac
           code=$?
           cat "$RUNNER_TEMP/out.txt"
           echo "code=${code}" >> "$GITHUB_OUTPUT"
@@ -107,7 +131,7 @@ jobs:
           CODE: ${{ steps.run.outputs.code }}
         run: |
           {
-            echo "### Summon: ${AGENT}"
+            echo "### Summon: ${AGENT} (${MODE})"
             echo
             echo "| Field | Value |"
             echo "| --- | --- |"

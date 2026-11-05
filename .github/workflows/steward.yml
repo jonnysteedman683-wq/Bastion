@@ -1,0 +1,76 @@
+# PR steward: triage every open PR in the fleet and report it on the UniSync ledger.
+#
+# Read-only on GitHub: the steward never merges, closes or comments (trust level R0; see docs/STEWARD.md).
+# Each run writes the triage to this run's summary and, when the ledger token is set, posts one heartbeat
+# plus one escalate per PR that needs the owner. The command centre feed shows both.
+#
+# Secrets:
+#   STEWARD_GITHUB_TOKEN   fine-grained, read-only: Pull requests, Checks, Commit statuses, Metadata
+#   UNISYNC_STEWARD_TOKEN  steward, may post heartbeat and escalate only (only its sha256 is in the ledger)
+
+name: PR steward
+
+on:
+  schedule:
+    - cron: "41 21 * * *"  # 07:41 Australia/Brisbane
+    - cron: "41 9 * * *"   # 19:41 Australia/Brisbane
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steward
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Triage open PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OWNER: ${{ github.repository_owner }}
+      UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check the tokens
+        id: tokens
+        env:
+          GH_READ: ${{ secrets.STEWARD_GITHUB_TOKEN }}
+          LEDGER: ${{ secrets.UNISYNC_STEWARD_TOKEN }}
+        run: |
+          if [[ -z "$GH_READ" ]]; then
+            echo "::error::Set the STEWARD_GITHUB_TOKEN repository secret (see docs/STEWARD.md)."
+            exit 1
+          fi
+          if [[ -z "$LEDGER" ]]; then
+            echo "::warning::UNISYNC_STEWARD_TOKEN is not set: the report goes to this run's summary only."
+            echo "post=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "post=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Lestinxor (pinned commit, no dependencies)
+        if: steps.tokens.outputs.post == 'true'
+        run: |
+          python -m pip install --quiet --no-deps \
+            "lestinxor @ git+https://github.com/jonnysteedman683-wq/LESTINXOR-AGENT.git@${LESTINXOR_SHA}"
+
+      - name: Scan
+        env:
+          STEWARD_GITHUB_TOKEN: ${{ secrets.STEWARD_GITHUB_TOKEN }}
+          UNISYNC_STEWARD_TOKEN: ${{ secrets.UNISYNC_STEWARD_TOKEN }}
+          POST: ${{ steps.tokens.outputs.post }}
+        run: |
+          args=(scan --owner "$OWNER" --summary "$GITHUB_STEP_SUMMARY" --json "$RUNNER_TEMP/steward.json" --run-url "$RUN_URL")
+          if [[ "$POST" == "true" ]]; then args+=(--post); fi
+          python -m tools.steward "${args[@]}"

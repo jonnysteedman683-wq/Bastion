@@ -1,0 +1,13 @@
+{
+  "comment": "Dead-man checks for every scheduled job in the fleet. Synced to Healthchecks.io by `python -m tools.deadman sync`. Schedules are copied from each workflow's `on.schedule` (GitHub cron, UTC). Grace is generous because GitHub often starts scheduled runs 10-30 minutes late.",
+  "checks": [
+    {"slug": "aih-analytics-archive", "repo": "jonnysteedman683-wq/AIH", "workflow": "analytics-archive.yml", "schedule": "*/20 * * * *", "grace": 2400},
+    {"slug": "seb-watch-hourly", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "watch.yml", "schedule": "7 * * * *", "grace": 2700},
+    {"slug": "seb-watch-digest", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "watch.yml", "schedule": "0 22 * * *", "grace": 7200},
+    {"slug": "seb-watch-canary", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "watch.yml", "schedule": "15 22 * * 0", "grace": 21600},
+    {"slug": "seb-live-evals", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "live-evals.yml", "schedule": "30 21 * * 0", "grace": 21600},
+    {"slug": "seb-codeql", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "codeql.yml", "schedule": "20 16 * * 4", "grace": 43200},
+    {"slug": "horizontal-sica", "repo": "jonnysteedman683-wq/HORIZONTAL", "workflow": "sica_evolution.yml", "schedule": "17 15 * * 0", "grace": 21600},
+    {"slug": "neurocore-safety-audit", "repo": "jonnysteedman683-wq/neurocore", "workflow": "safety-audit.yml", "schedule": "0 0 * * *", "grace": 7200}
+  ]
+}

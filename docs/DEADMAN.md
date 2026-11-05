@@ -19,7 +19,7 @@ or fails, Healthchecks.io alerts Jonny once the check's grace period has passed.
    ```bash
    HC_API_KEY=... python -m tools.deadman sync
    ```
-   It should print `8/8 checks in sync`.
+   It should print `9/9 checks in sync`.
 4. For G3b, add the repository secret `HC_PING_KEY` to AIH, Sebastian, HORIZONTAL and neurocore.
 
 ## Adding a scheduled job
@@ -35,4 +35,4 @@ A registry entry with no ping step goes DOWN after its first period. That's deli
 
 - GitHub can start a scheduled run 10–30 minutes late, and can skip runs under load.
 - GitHub disables a public repository's schedules after 60 days with no repository activity. A dead-man check is how you find out.
-- The free plan allows 20 checks; the fleet uses 8.
+- The free plan allows 20 checks; the fleet uses 9.

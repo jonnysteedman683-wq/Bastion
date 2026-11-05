@@ -29,6 +29,7 @@ Nothing in the cloud calls into an agent; agents write to the ledger, dashboards
 | `services/hello/` | The smallest possible service, to prove the pipeline |
 | `infra/gcp/bootstrap.sh` | One-time keyless Google Cloud setup |
 | `.github/workflows/summon.yml` + `tools/summon/` | Summon: Lestinxor posts a task, Sebastian claims and runs it, the result lands on the UniSync ledger ([how](docs/SUMMON.md)) |
+| `tools/steward/` | PR steward agent: triages every open PR in the fleet and reports it on the ledger ([how](docs/STEWARD.md)) |
 | `docs/` | [Quartermaster runbook](docs/QUARTERMASTER.md) and [backlog](docs/BACKLOG.md) |
 
 ## Checks

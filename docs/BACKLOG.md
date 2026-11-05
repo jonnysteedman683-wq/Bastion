@@ -46,4 +46,10 @@ Exit: a fresh account deploys the whole stack with one command.
 
 - [ ] R1 Infrastructure template, roles UI, docs
 
+## Agents
+
+- [x] A1 PR steward: `python -m tools.steward scan` triages every open PR, read-only, and posts a heartbeat and escalations ([STEWARD.md](STEWARD.md))
+- [x] A2 🔒 Schedule the steward: `.github/workflows/steward.yml`, twice daily and on demand
+- [ ] A3 Steward at R1: merge `merge-ready` dependency bumps itself once G2's trust ladder exists
+
 ## Proposed

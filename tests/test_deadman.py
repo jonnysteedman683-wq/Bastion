@@ -13,6 +13,8 @@ from typing import Any
 
 from tools import deadman
 
+SIZE = 9  # checks in deploy/healthchecks.json; update when a scheduled job is added or removed
+
 GOOD: dict[str, Any] = {
     "slug": "aih-analytics-archive",
     "repo": "jonnysteedman683-wq/AIH",
@@ -48,8 +50,8 @@ class RegistryTest(unittest.TestCase):
     def test_repo_registry_is_valid_and_covers_every_scheduled_job(self) -> None:
         checks, errors = deadman.load()
         self.assertEqual(errors, [])
-        self.assertEqual(len(checks), 8)
-        self.assertEqual(len({c.slug for c in checks}), 8)
+        self.assertEqual(len(checks), SIZE)
+        self.assertEqual(len({c.slug for c in checks}), SIZE)
 
     def test_good_check_parses_with_utc_default(self) -> None:
         checks, errors = deadman.validate({"checks": [GOOD]})
@@ -113,12 +115,12 @@ class CliTest(unittest.TestCase):
     def test_validate_needs_no_key(self) -> None:
         code, out = run("validate")
         self.assertEqual(code, 0)
-        self.assertIn("8 checks valid", out)
+        self.assertIn(f"{SIZE} checks valid", out)
 
     def test_plan_prints_payloads_and_never_the_key(self) -> None:
         code, out = run("plan", env={"HC_API_KEY": "secret-key"})
         self.assertEqual(code, 0)
-        self.assertEqual(len(json.loads(out)), 8)
+        self.assertEqual(len(json.loads(out)), SIZE)
         self.assertNotIn("secret-key", out)
 
     def test_sync_without_key_fails_before_any_request(self) -> None:
@@ -129,24 +131,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(post.calls, [])
 
     def test_sync_upserts_every_check(self) -> None:
-        post = FakePost([201] + [200] * 7)
+        post = FakePost([201] + [200] * (SIZE - 1))
         code, out = run("sync", env={"HC_API_KEY": "k"}, post=post)
         self.assertEqual(code, 0)
-        self.assertEqual(len(post.calls), 8)
+        self.assertEqual(len(post.calls), SIZE)
         self.assertTrue(all(url == "https://healthchecks.io/api/v3/checks/" for url, _, _ in post.calls))
         self.assertTrue(all(key == "k" for _, _, key in post.calls))
         self.assertIn("created aih-analytics-archive", out)
-        self.assertIn("8/8 checks in sync", out)
+        self.assertIn(f"{SIZE}/{SIZE} checks in sync", out)
 
     def test_sync_reports_failures_and_keeps_going(self) -> None:
-        post = FakePost([403, 401] + [200] * 6)
+        post = FakePost([403, 401] + [200] * (SIZE - 2))
         code, out = run("sync", env={"HC_API_KEY": "k", "HC_API_URL": "https://hc.example/api/v3"}, post=post)
         self.assertEqual(code, 1)
-        self.assertEqual(len(post.calls), 8)
+        self.assertEqual(len(post.calls), SIZE)
         self.assertEqual(post.calls[0][0], "https://hc.example/api/v3/checks/")
         self.assertIn("HTTP 403: check limit reached", out)
         self.assertIn("HTTP 401: API key missing or invalid", out)
-        self.assertIn("6/8 checks in sync", out)
+        self.assertIn(f"{SIZE - 2}/{SIZE} checks in sync", out)
 
     def test_invalid_registry_stops_before_sync(self) -> None:
         with tempfile.TemporaryDirectory() as d:

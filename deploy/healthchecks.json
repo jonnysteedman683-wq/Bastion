@@ -8,6 +8,7 @@
     {"slug": "seb-live-evals", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "live-evals.yml", "schedule": "30 21 * * 0", "grace": 21600},
     {"slug": "seb-codeql", "repo": "jonnysteedman683-wq/Sebastian", "workflow": "codeql.yml", "schedule": "20 16 * * 4", "grace": 43200},
     {"slug": "horizontal-sica", "repo": "jonnysteedman683-wq/HORIZONTAL", "workflow": "sica_evolution.yml", "schedule": "17 15 * * 0", "grace": 21600},
-    {"slug": "neurocore-safety-audit", "repo": "jonnysteedman683-wq/neurocore", "workflow": "safety-audit.yml", "schedule": "0 0 * * *", "grace": 7200}
+    {"slug": "neurocore-safety-audit", "repo": "jonnysteedman683-wq/neurocore", "workflow": "safety-audit.yml", "schedule": "0 0 * * *", "grace": 7200},
+    {"slug": "bastion-steward", "repo": "jonnysteedman683-wq/Bastion", "workflow": "steward.yml", "schedule": "41 9,21 * * *", "grace": 7200}
   ]
 }

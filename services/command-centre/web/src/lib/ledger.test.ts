@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cursorOf, mergeEvents, timeAgo, type LedgerEvent } from "./ledger";
+import { cursorOf, isSafeGithubUrl, mergeEvents, timeAgo, type LedgerEvent } from "./ledger";
 
 const ev = (id: number): LedgerEvent => ({ id, ts: "2026-11-04T00:00:00Z", agent: "a", kind: "k", summary: "s" });
 
@@ -27,5 +27,13 @@ describe("timeAgo", () => {
     expect(timeAgo("2026-11-04T11:55:00Z", now)).toBe("5m ago");
     expect(timeAgo("2026-11-04T09:00:00Z", now)).toBe("3h ago");
     expect(timeAgo("2026-11-02T12:00:00Z", now)).toBe("2d ago");
+  });
+});
+
+describe("isSafeGithubUrl", () => {
+  it("only allows HTTPS GitHub links", () => {
+    expect(isSafeGithubUrl("https://github.com/org/repo/pull/1")).toBe(true);
+    expect(isSafeGithubUrl("http://github.com/org/repo")).toBe(false);
+    expect(isSafeGithubUrl("https://example.com")).toBe(false);
   });
 });

@@ -12,6 +12,11 @@ class VercelConfigTests(unittest.TestCase):
         self.assertTrue((ROOT / "public" / "index.html").is_file())
         self.assertNotEqual(config["outputDirectory"], "public")
 
+    def test_install_command_does_not_skip_python_dependencies(self) -> None:
+        config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("installCommand", config)
+
 
 if __name__ == "__main__":
     unittest.main()

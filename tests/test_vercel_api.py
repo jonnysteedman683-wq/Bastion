@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
+from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from api import data
 
@@ -30,17 +33,26 @@ class FakeConn:
         self.closed = True
 
 
-class AuthTest(unittest.TestCase):
-    def test_fails_closed_without_a_configured_token(self) -> None:
-        self.assertEqual(data.check_auth("Bearer anything", ""), (503, "dashboard token not configured"))
+class PublicDashboardTest(unittest.TestCase):
+    def test_api_serves_data_without_authorization(self) -> None:
+        request = object.__new__(data.handler)
+        request.headers = {}
+        sent: list[tuple[int, object]] = []
+        request._send = lambda status, payload: sent.append((status, payload))
 
-    def test_rejects_missing_or_wrong_token(self) -> None:
-        self.assertEqual(data.check_auth("", "s3cret-passphrase")[0], 401)
-        self.assertEqual(data.check_auth("Bearer nope", "s3cret-passphrase")[0], 401)
-        self.assertEqual(data.check_auth("Basic s3cret-passphrase", "s3cret-passphrase")[0], 401)
+        with (
+            mock.patch.dict(os.environ, {"LEDGER_DSN": "postgresql://example.invalid/db"}, clear=True),
+            mock.patch.object(data, "connect_from_dsn"),
+            mock.patch.object(data, "load", return_value={"stats": {"status": "ok", "data": []}}),
+        ):
+            request.do_GET()
 
-    def test_accepts_the_right_token(self) -> None:
-        self.assertEqual(data.check_auth("Bearer s3cret-passphrase", "s3cret-passphrase"), (200, ""))
+        self.assertEqual(sent, [(200, {"stats": {"status": "ok", "data": []}})])
+
+    def test_static_page_has_no_passphrase_gate(self) -> None:
+        page = (Path(__file__).parents[1] / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("BASTION_DASH_TOKEN", page)
+        self.assertNotIn('id="passphrase"', page)
 
 
 class QueriesTest(unittest.TestCase):

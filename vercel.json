@@ -2,8 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "echo 'no install: static page + Python function'",
-  "buildCommand": "echo 'no build: public/ is served as is'",
-  "outputDirectory": "public",
+  "buildCommand": "cp -R public dist",
+  "outputDirectory": "dist",
   "functions": {
     "api/data.py": { "maxDuration": 15 }
   },

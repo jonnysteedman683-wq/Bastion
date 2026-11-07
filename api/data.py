@@ -1,6 +1,5 @@
-"""Vercel function: GET /api/data -> the command centre's five datasets, read-only, behind a passphrase.
+"""Vercel function: GET /api/data -> the command centre's five public, read-only datasets.
 
-    Authorization: Bearer <BASTION_DASH_TOKEN>      required; the function refuses everything if unset
     -> {"stats": {"status": "ok", "data": [...]}, "roster": ..., "feed": ..., "tasks": ..., "control": ...}
 
 Reads the UniSync ledger as the read-only `bastion_reader` role (LEDGER_DSN, a Vercel environment
@@ -10,7 +9,6 @@ request reaches SQL. See services/command-centre/ledger/*.sql for the views and 
 
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import ssl
@@ -46,16 +44,6 @@ QUERIES: dict[str, str] = {
     ),
     "control": "select halted, reason, since from bastion.control",
 }
-
-
-def check_auth(header: str, token: str) -> tuple[int, str]:
-    """(200, "") for the right bearer token; fail closed when no token is configured."""
-    if not token:
-        return 503, "dashboard token not configured"
-    scheme, _, given = header.partition(" ")
-    if scheme != "Bearer" or not hmac.compare_digest(given.encode(), token.encode()):
-        return 401, "wrong or missing passphrase"
-    return 200, ""
 
 
 def connect_from_dsn(dsn: str, timeout: float = 8.0) -> Any:
@@ -95,10 +83,6 @@ def load(connect: Callable[[], Any]) -> dict[str, dict[str, Any]]:
 
 class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel's Python runtime looks for this name
     def do_GET(self) -> None:
-        status, message = check_auth(self.headers.get("Authorization", ""), os.environ.get("BASTION_DASH_TOKEN", ""))
-        if status != 200:
-            self._send(status, {"error": message})
-            return
         dsn = os.environ.get("LEDGER_DSN", "")
         if not dsn:
             self._send(503, {"error": "LEDGER_DSN not configured"})

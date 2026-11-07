@@ -185,6 +185,13 @@ class FakeConn:
 
 
 class PostgresLedgerTest(unittest.TestCase):
+    def test_operations_task_query_excludes_output(self) -> None:
+        conn = FakeConn([["task-1", "Ship overview", "Jonny", "Sebastian", "done", "demo", "https://github.com/example/run", "2026-11-04T11:00:00Z", "2026-11-04T11:01:00Z", "2026-11-04T11:02:00Z", "2026-11-04T11:02:00Z", "3 checks passed"]])
+        tasks = app.PostgresLedger(lambda: conn).dashboard_tasks()
+        self.assertEqual(tasks[0]["status"], "done")
+        self.assertNotIn("output", tasks[0])
+        self.assertIn("FROM bastion.dashboard_tasks", conn.calls[0][0])
+
     def test_events_query_and_mapping(self) -> None:
         conn = FakeConn([[9, "2026-11-04T11:00:00Z", "Sebastian", "task.request", "Run demo"]])
         events = app.PostgresLedger(lambda: conn).events(after=7, limit=20)

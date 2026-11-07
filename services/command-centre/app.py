@@ -137,6 +137,10 @@ def _pg8000_connect(dsn: str, timeout: float) -> Connect:
 
 FEED_SQL = "SELECT id, ts, agent, kind, summary FROM bastion.feed WHERE id > :after ORDER BY id DESC LIMIT :limit"
 ROSTER_SQL = "SELECT name, role, repos FROM bastion.roster ORDER BY name"
+DASHBOARD_TASKS_SQL = (
+    "SELECT task_id, title, requested_by, agent, status, mode, run_url, requested_ts, claimed_ts, "
+    "finished_ts, updated_ts, detail FROM bastion.dashboard_tasks ORDER BY updated_ts DESC LIMIT :limit"
+)
 
 
 class PostgresLedger:
@@ -164,6 +168,10 @@ class PostgresLedger:
         for name, role, repos in self._run(ROSTER_SQL):
             out.append({"name": str(name), "role": str(role), "runs_on": ", ".join(repos or []) or "-"})
         return out
+
+    def dashboard_tasks(self, limit: int = 100) -> list[dict[str, str]]:
+        fields = ("task_id", "title", "requested_by", "agent", "status", "mode", "run_url", "requested_ts", "claimed_ts", "finished_ts", "updated_ts", "detail")
+        return [dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True)) for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)]
 
 
 def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:

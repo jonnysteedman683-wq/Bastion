@@ -37,14 +37,6 @@
   body { font-family: var(--font-anthropic-sans); -webkit-font-smoothing: antialiased; }
   .bx-page { max-width: 1240px; margin-inline: auto; padding-block: max(1.5rem, env(safe-area-inset-top)) 3rem;
     padding-left: max(16px, env(safe-area-inset-left), 3vw); padding-right: max(16px, env(safe-area-inset-right), 3vw); }
-  .bx-gate { max-width: 26rem; margin: 18vh auto 0; padding: var(--cds-pad-lg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); background: var(--color-panel); display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
-  .bx-gate h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 2rem; margin: 0; }
-  .bx-gate p { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-body); }
-  .bx-gate input { font: inherit; padding: var(--cds-pad-sm); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-bg); color: var(--color-fg); }
-  .bx-gate button, .bx-signout { font: inherit; font-weight: 500; padding: var(--cds-pad-sm) var(--cds-pad-md); border-radius: var(--cds-radius); border: 1px solid var(--color-fg); background: var(--color-fg); color: var(--color-bg); cursor: pointer; }
-  .bx-signout { background: transparent; color: var(--color-fg-muted); border-color: var(--color-border-line); font-size: var(--cds-font-size-caption); padding: var(--cds-pad-xs) var(--cds-pad-sm); justify-self: end; }
-  .bx-gate-error { color: var(--color-bad) !important; }
-
   .bx { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
   .bx-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--cds-gap-sm) var(--cds-gap-lg); align-items: end; }
   .bx-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: clamp(2rem, 5vw, 3.25rem); line-height: 1; letter-spacing: -.02em; margin: 0; }
@@ -144,30 +136,17 @@
 </style>
 </head>
 <body>
-<form class="bx-gate" id="gate" hidden>
-  <h1>Bastion</h1>
-  <p>Enter the dashboard passphrase (the <code>BASTION_DASH_TOKEN</code> you set in Vercel). It stays in this browser.</p>
-  <input id="passphrase" type="password" autocomplete="current-password" aria-label="Passphrase" required>
-  <button type="submit">Open the command centre</button>
-  <p class="bx-gate-error" id="gate-error" hidden></p>
-</form>
-<main class="bx-page" id="app" hidden>
+<main class="bx-page" id="app">
 
 <script>
   // A small stand-in for the claude.ai Dashboard runtime, so the same page code runs here:
   // one call to /api/data loads all five datasets; draws re-run on every load.
   (() => {
-    const KEY = 'bastion.passphrase';
-    const read = () => { try { return localStorage.getItem(KEY) || ''; } catch { return ''; } };
-    const write = (v) => { try { if (v) localStorage.setItem(KEY, v); else localStorage.removeItem(KEY); } catch { /* private mode */ } };
     const state = {};
     const draws = new Map();
     const onData = [];
     let params = {};
     let inflight = null;
-    const gate = document.getElementById('gate');
-    const app = document.getElementById('app');
-    const err = document.getElementById('gate-error');
 
     const runDraw = (name) => {
       const fn = draws.get(name);
@@ -183,12 +162,7 @@
       for (const k of Object.keys(state)) state[k].refreshing = true;
       inflight = (async () => {
         try {
-          const res = await fetch('/api/data', { headers: { Authorization: 'Bearer ' + read() }, cache: 'no-store' });
-          if (res.status === 401 || res.status === 503) {
-            const body = await res.json().catch(() => ({}));
-            showGate(body.error || 'The passphrase was not accepted.');
-            return;
-          }
+          const res = await fetch('/api/data', { cache: 'no-store' });
           const body = await res.json();
           if (!res.ok) throw new Error(body.error || res.statusText);
           for (const [k, v] of Object.entries(body)) state[k] = { status: v.status, data: v.data || [], message: v.message, refreshing: false };
@@ -202,17 +176,6 @@
       return inflight;
     }
 
-    function showGate(message) {
-      app.hidden = true; gate.hidden = false;
-      err.hidden = !message; err.textContent = message || '';
-      document.getElementById('passphrase').focus();
-    }
-    gate.addEventListener('submit', (e) => {
-      e.preventDefault();
-      write(document.getElementById('passphrase').value.trim());
-      gate.hidden = true; app.hidden = false; load();
-    });
-
     window.dash = {
       data: (id) => state[id] || { status: 'loading', data: [], refreshing: false },
       draw: (name, fn) => { if (fn) draws.set(name, fn); runDraw(name); },
@@ -224,15 +187,10 @@
       loader: () => {},
       colors: ['#4f6bff', '#c157d6', '#1aa39a', '#e2733a', '#7a8bff', '#d6467a', '#5aa83a', '#a07a2f'],
     };
-    window.bxSignOut = () => { write(''); showGate(''); };
-
-    if (read()) { app.hidden = false; queueMicrotask(load); } else { showGate(''); }
+    queueMicrotask(load);
     window.addEventListener('resize', () => runDraw('map'));
   })();
 </script>
-  <div style="display:grid"><button type="button" class="bx-signout" onclick="bxSignOut()">Sign out</button></div>
-
-
 <div class="bx">
   <header class="bx-top" id="overview">
     <div>

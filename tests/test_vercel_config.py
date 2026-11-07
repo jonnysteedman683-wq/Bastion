@@ -16,6 +16,10 @@ class VercelConfigTests(unittest.TestCase):
         config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
 
         self.assertNotIn("installCommand", config)
+        self.assertEqual(
+            (ROOT / "api" / "requirements.txt").read_text(encoding="utf-8"),
+            (ROOT / "requirements.txt").read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":

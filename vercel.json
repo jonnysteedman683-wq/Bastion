@@ -1,7 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "echo 'no install: static page + Python function'",
   "buildCommand": "cp -R public dist",
   "outputDirectory": "dist",
   "functions": {

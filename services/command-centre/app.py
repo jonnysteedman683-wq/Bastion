@@ -17,8 +17,8 @@ Logs one JSON line per request to stderr. Shuts down cleanly on SIGTERM.
 
 from __future__ import annotations
 
-import json
 import hmac
+import json
 import mimetypes
 import os
 import signal
@@ -28,12 +28,13 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.cookies import SimpleCookie
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 SERVICE = "command-centre"
 HERE = Path(__file__).resolve().parent
@@ -98,11 +99,13 @@ class AuthClient:
         self.configured = bool(self._url and self._key)
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "AuthClient":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> AuthClient:
         source = os.environ if env is None else env
         return cls(source.get("SUPABASE_URL", ""), source.get("SUPABASE_PUBLISHABLE_KEY", ""))
 
-    def _request(self, method: str, path: str, payload: dict[str, object] | None = None, token: str | None = None) -> dict[str, object]:
+    def _request(
+        self, method: str, path: str, payload: dict[str, object] | None = None, token: str | None = None
+    ) -> dict[str, object]:
         if not self.configured:
             raise AuthError("auth not configured")
         headers = {"apikey": self._key}
@@ -112,9 +115,11 @@ class AuthClient:
         if payload is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(f"{self._url}/auth/v1{path}", data=data, headers=headers, method=method)
+        request = urllib.request.Request(  # noqa: S310 -- Supabase URL is an operator-controlled setting.
+            f"{self._url}/auth/v1{path}", data=data, headers=headers, method=method
+        )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
                 return json.loads(response.read() or b"{}")
         except (urllib.error.HTTPError, urllib.error.URLError, ValueError) as err:
             raise AuthError("auth request failed") from err
@@ -176,15 +181,31 @@ class DemoLedger:
     def operations(self) -> dict[str, object]:
         now = self._clock().strftime("%Y-%m-%dT%H:%M:%SZ")
         tasks = [
-            {"task_id": "demo-approval", "title": "Deploy hello", "status": "awaiting_approval", "agent": "Quartermaster", "updated_ts": now, "detail": "Owner approval required"},
-            {"task_id": "demo-complete", "title": "Run nightly demo", "status": "done", "agent": "Sebastian", "updated_ts": now, "detail": "3 checks passed"},
+            {
+                "task_id": "demo-approval",
+                "title": "Deploy hello",
+                "status": "awaiting_approval",
+                "agent": "Quartermaster",
+                "updated_ts": now,
+                "detail": "Owner approval required",
+            },
+            {
+                "task_id": "demo-complete",
+                "title": "Run nightly demo",
+                "status": "done",
+                "agent": "Sebastian",
+                "updated_ts": now,
+                "detail": "3 checks passed",
+            },
         ]
         return {
             "generated_at": now,
             "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
             "tasks": tasks,
             "pr_report": None,
-            "completions": [{"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished: 3 checks passed", "ts": now}],
+            "completions": [
+                {"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished: 3 checks passed", "ts": now}
+            ],
             "control": {"halted": False, "reason": None, "since": None},
         }
 
@@ -257,30 +278,75 @@ class PostgresLedger:
         return out
 
     def dashboard_tasks(self, limit: int = 100) -> list[dict[str, str]]:
-        fields = ("task_id", "title", "requested_by", "agent", "status", "mode", "run_url", "requested_ts", "claimed_ts", "finished_ts", "updated_ts", "detail")
-        return [dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True)) for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)]
+        fields = (
+            "task_id",
+            "title",
+            "requested_by",
+            "agent",
+            "status",
+            "mode",
+            "run_url",
+            "requested_ts",
+            "claimed_ts",
+            "finished_ts",
+            "updated_ts",
+            "detail",
+        )
+        return [
+            dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True))
+            for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)
+        ]
 
     def operations(self) -> dict[str, object]:
         tasks = self.dashboard_tasks()
         attention = [
             {"kind": task["status"], "title": task["title"], "detail": task["detail"]}
-            for task in tasks if task["status"] in {"failed", "awaiting_approval"}
+            for task in tasks
+            if task["status"] in {"failed", "awaiting_approval"}
         ]
         report_rows = self._run(STEWARD_REPORT_SQL)
         report = None
         if report_rows:
             scanned_ts, summary, counts, floods, items, truncated = report_rows[0]
-            decode = lambda value, default: json.loads(value) if isinstance(value, str) else (value or default)
-            report = {"scanned_ts": str(scanned_ts), "summary": str(summary), "counts": decode(counts, {}), "floods": decode(floods, {}), "items": decode(items, []), "truncated": int(truncated or 0)}
+
+            def decode(value: object, default: object) -> object:
+                return json.loads(value) if isinstance(value, str) else (value or default)
+
+            report = {
+                "scanned_ts": str(scanned_ts),
+                "summary": str(summary),
+                "counts": decode(counts, {}),
+                "floods": decode(floods, {}),
+                "items": decode(items, []),
+                "truncated": int(truncated or 0),
+            }
         control_rows = self._run(CONTROL_SQL)
         control = {"halted": False, "reason": None, "since": None}
         if control_rows:
             halted, reason, since = control_rows[0]
-            control = {"halted": bool(halted), "reason": None if reason is None else str(reason), "since": None if since is None else str(since)}
+            control = {
+                "halted": bool(halted),
+                "reason": None if reason is None else str(reason),
+                "since": None if since is None else str(since),
+            }
             if control["halted"]:
-                attention.insert(0, {"kind": "halted", "title": "Fleet halted", "detail": control["reason"] or "The owner halted the fleet"})
+                attention.insert(
+                    0,
+                    {
+                        "kind": "halted",
+                        "title": "Fleet halted",
+                        "detail": control["reason"] or "The owner halted the fleet",
+                    },
+                )
         completions = [asdict(event) for event in self.events(0, 50) if event.kind in {"task.result", "deploy.record"}]
-        return {"generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "attention": attention, "tasks": tasks, "pr_report": report, "completions": completions, "control": control}
+        return {
+            "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "attention": attention,
+            "tasks": tasks,
+            "pr_report": report,
+            "completions": completions,
+            "control": control,
+        }
 
 
 def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:
@@ -292,6 +358,7 @@ def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:
 
 
 # --- Ingest buffer (local AI push) -----------------------------------------------------------
+
 
 def ingest_agent_keys(env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Return a valid per-agent ingest registry, or disable ingest on bad configuration."""
@@ -371,6 +438,7 @@ def ingest_events(after: int = 0, limit: int = MAX_LIMIT) -> list[Event]:
 
 
 # --- Ledger wrapper that merges ingest buffer -----------------------------------------------
+
 
 class MergedLedger:
     """Wraps a base ledger and merges in locally ingested events."""
@@ -542,10 +610,17 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
             except AuthError:
                 self._redirect("/login?error=link")
                 return
-            self._redirect("/", {"Set-Cookie": f"bastion_session={access_token}; HttpOnly; Secure; SameSite=Lax; Path=/"})
+            self._redirect(
+                "/", {"Set-Cookie": f"bastion_session={access_token}; HttpOnly; Secure; SameSite=Lax; Path=/"}
+            )
 
         def _sign_out(self) -> None:
-            self._send(204, "text/plain; charset=utf-8", b"", headers={"Set-Cookie": "bastion_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0"})
+            self._send(
+                204,
+                "text/plain; charset=utf-8",
+                b"",
+                headers={"Set-Cookie": "bastion_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0"},
+            )
 
         def _ingest(self) -> None:
             agent = agent_for_ingest_token(self.headers.get("Authorization", ""), ingest_agent_keys())
@@ -604,7 +679,14 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                 self.send_header(name, value)
             self.end_headers()
 
-        def _send(self, status: int, content_type: str, body: bytes, cache: str = "no-store", headers: Mapping[str, str] | None = None) -> None:
+        def _send(
+            self,
+            status: int,
+            content_type: str,
+            body: bytes,
+            cache: str = "no-store",
+            headers: Mapping[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -632,7 +714,9 @@ def build_server(
     static_dir: Path = STATIC_DIR,
     auth: Auth | None = None,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(version, MergedLedger(ledger or ledger_from_env()), static_dir, auth or AuthClient.from_env())
+    handler = make_handler(
+        version, MergedLedger(ledger or ledger_from_env()), static_dir, auth or AuthClient.from_env()
+    )
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

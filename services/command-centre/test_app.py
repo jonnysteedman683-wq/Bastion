@@ -36,9 +36,19 @@ class FixedLedger:
         return {
             "generated_at": "2026-11-04T12:00:00Z",
             "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
-            "tasks": [{"task_id": "demo-1", "title": "Run demo", "status": "done", "agent": "Sebastian", "updated_ts": "2026-11-04T11:00:00Z"}],
+            "tasks": [
+                {
+                    "task_id": "demo-1",
+                    "title": "Run demo",
+                    "status": "done",
+                    "agent": "Sebastian",
+                    "updated_ts": "2026-11-04T11:00:00Z",
+                }
+            ],
             "pr_report": None,
-            "completions": [{"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished", "ts": "2026-11-04T11:00:00Z"}],
+            "completions": [
+                {"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished", "ts": "2026-11-04T11:00:00Z"}
+            ],
             "control": {"halted": False, "reason": None, "since": None},
         }
 
@@ -85,7 +95,9 @@ class ServerTest(unittest.TestCase):
         (static / "assets" / "app-abc.js").write_text("console.log(1)", encoding="utf-8")
         cls.ledger = FixedLedger([ev(1), ev(2, "Claude"), ev(3, "Quartermaster", kind="deploy.record")])
         cls.auth = FakeAuth()
-        cls.server = app.build_server(0, "abc1234", host="127.0.0.1", ledger=cls.ledger, static_dir=static, auth=cls.auth)
+        cls.server = app.build_server(
+            0, "abc1234", host="127.0.0.1", ledger=cls.ledger, static_dir=static, auth=cls.auth
+        )
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -109,23 +121,34 @@ class ServerTest(unittest.TestCase):
         else:
             os.environ["INGEST_AGENT_KEYS"] = self.previous_ingest_keys
 
-    def get(self, path: str, headers: dict[str, str] | None = None, authenticated: bool = True) -> tuple[int, dict[str, str], bytes]:
+    def get(
+        self, path: str, headers: dict[str, str] | None = None, authenticated: bool = True
+    ) -> tuple[int, dict[str, str], bytes]:
         try:
             request_headers = {"Cookie": "bastion_session=valid-token"} if authenticated else {}
             request_headers.update(headers or {})
+
             class NoRedirect(urllib.request.HTTPRedirectHandler):
-                def redirect_request(self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
+                def redirect_request(
+                    self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str
+                ) -> None:
                     return None
 
-            with urllib.request.build_opener(NoRedirect()).open(urllib.request.Request(self.base + path, headers=request_headers), timeout=5) as resp:
+            with urllib.request.build_opener(NoRedirect()).open(
+                urllib.request.Request(self.base + path, headers=request_headers), timeout=5
+            ) as resp:
                 return resp.status, dict(resp.headers), resp.read()
         except urllib.error.HTTPError as err:
             return err.code, dict(err.headers), err.read()
 
-    def post(self, path: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
+    def post(
+        self, path: str, payload: dict[str, object], headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
         return self.post_bytes(path, json.dumps(payload).encode("utf-8"), headers)
 
-    def post_bytes(self, path: str, body: bytes, headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
+    def post_bytes(
+        self, path: str, body: bytes, headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
         request_headers = {"Content-Type": "application/json"}
         request_headers.update(headers or {})
         request = urllib.request.Request(
@@ -142,7 +165,9 @@ class ServerTest(unittest.TestCase):
 
     def test_ingest_assigns_agent_from_matching_key(self) -> None:
         """Removing server-side identity derivation must reject this request's assertion."""
-        os.environ["INGEST_AGENT_KEYS"] = json.dumps({"researcher-01": "researcher-secret", "writer-02": "writer-secret"})
+        os.environ["INGEST_AGENT_KEYS"] = json.dumps(
+            {"researcher-01": "researcher-secret", "writer-02": "writer-secret"}
+        )
         status, _, body = self.post(
             "/api/ingest",
             {"agent": "writer-02", "source": "laptop", "kind": "task.completed", "summary": "Indexed 24 documents"},
@@ -184,7 +209,12 @@ class ServerTest(unittest.TestCase):
         os.environ["INGEST_AGENT_KEYS"] = json.dumps({"Sebastian": "sebastian-secret"})
         status, _, _ = self.post(
             "/api/ingest",
-            {"source": "desktop", "kind": "task.completed", "summary": "Connected to Bastion", "ts": "2026-11-07T13:30:00Z"},
+            {
+                "source": "desktop",
+                "kind": "task.completed",
+                "summary": "Connected to Bastion",
+                "ts": "2026-11-07T13:30:00Z",
+            },
             {"Authorization": "Bearer sebastian-secret"},
         )
         self.assertEqual(status, 201)
@@ -192,7 +222,13 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         events = json.loads(body)["events"]
         self.assertIn(
-            {"id": 10_000_001, "ts": "2026-11-07T13:30:00Z", "agent": "Sebastian", "kind": "task.completed", "summary": "Connected to Bastion"},
+            {
+                "id": 10_000_001,
+                "ts": "2026-11-07T13:30:00Z",
+                "agent": "Sebastian",
+                "kind": "task.completed",
+                "summary": "Connected to Bastion",
+            },
             events,
         )
         self.assertEqual(len({event["id"] for event in events}), len(events))
@@ -212,7 +248,15 @@ class ServerTest(unittest.TestCase):
     def test_magic_link_and_callback_create_a_secure_session(self) -> None:
         status, _, _ = self.post("/auth/magic-link", {"email": "jonny@example.com"})
         self.assertEqual(status, 202)
-        self.assertEqual(self.auth.sent, [("jonny@example.com", f"https://{self.server.server_address[0]}:{self.server.server_address[1]}/auth/callback")])
+        self.assertEqual(
+            self.auth.sent,
+            [
+                (
+                    "jonny@example.com",
+                    f"https://{self.server.server_address[0]}:{self.server.server_address[1]}/auth/callback",
+                )
+            ],
+        )
         status, headers, _ = self.get("/auth/callback?token_hash=valid-hash&type=email", authenticated=False)
         self.assertEqual(status, 303)
         self.assertEqual(headers["Location"], "/")
@@ -349,7 +393,24 @@ class FakeConn:
 
 class PostgresLedgerTest(unittest.TestCase):
     def test_operations_task_query_excludes_output(self) -> None:
-        conn = FakeConn([["task-1", "Ship overview", "Jonny", "Sebastian", "done", "demo", "https://github.com/example/run", "2026-11-04T11:00:00Z", "2026-11-04T11:01:00Z", "2026-11-04T11:02:00Z", "2026-11-04T11:02:00Z", "3 checks passed"]])
+        conn = FakeConn(
+            [
+                [
+                    "task-1",
+                    "Ship overview",
+                    "Jonny",
+                    "Sebastian",
+                    "done",
+                    "demo",
+                    "https://github.com/example/run",
+                    "2026-11-04T11:00:00Z",
+                    "2026-11-04T11:01:00Z",
+                    "2026-11-04T11:02:00Z",
+                    "2026-11-04T11:02:00Z",
+                    "3 checks passed",
+                ]
+            ]
+        )
         tasks = app.PostgresLedger(lambda: conn).dashboard_tasks()
         self.assertEqual(tasks[0]["status"], "done")
         self.assertNotIn("output", tasks[0])

@@ -8,7 +8,7 @@ serves `public/index.html` as is and runs one Python function, `api/data.py`.
 | `public/index.html` | The dashboard: live progress, systems map, summon buttons, tasks with output, auto-refresh |
 | `api/data.py` | `GET /api/data`: five fixed, read-only queries on the `bastion` views, as `bastion_reader` |
 | `requirements.txt` | pg8000 and its dependencies, pinned with hashes, for the function |
-| `vercel.json` | No install or build step, `public/` as the output, strict security headers |
+| `vercel.json` | Copies the static page to generated `dist/`, configures the function, and sets strict security headers |
 
 ## Privacy
 

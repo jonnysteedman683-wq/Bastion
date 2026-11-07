@@ -18,17 +18,22 @@ Logs one JSON line per request to stderr. Shuts down cleanly on SIGTERM.
 from __future__ import annotations
 
 import json
+import hmac
 import mimetypes
 import os
 import signal
+import sqlite3
 import sys
 import threading
+import urllib.error
 import urllib.parse
+import urllib.request
+from http.cookies import SimpleCookie
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 SERVICE = "command-centre"
 HERE = Path(__file__).resolve().parent
@@ -37,6 +42,8 @@ ROSTER_PATH = HERE / "roster.json"
 MAX_LIMIT = 200
 ACTIVE_WITHIN = timedelta(hours=1)
 IDLE_WITHIN = timedelta(days=1)
+INGEST_DB_PATH = Path(os.environ.get("INGEST_DB", str(Path(__file__).resolve().parent / "ingest.db")))
+LOCAL_EVENT_ID_OFFSET = 10_000_000
 
 # Only our own origin may load scripts, styles, data or frames. No inline script.
 CSP = (
@@ -66,6 +73,67 @@ class Ledger(Protocol):
         ...
 
     def operations(self) -> dict[str, object]: ...
+
+
+class AuthError(Exception):
+    """A failed or unavailable Supabase Auth request."""
+
+
+class Auth(Protocol):
+    configured: bool
+
+    def current_user(self, access_token: str) -> dict[str, object]: ...
+
+    def send_magic_link(self, email: str, callback_url: str) -> None: ...
+
+    def verify_magic_link(self, token_hash: str, token_type: str) -> str: ...
+
+
+class AuthClient:
+    """Small server-only Supabase Auth REST client."""
+
+    def __init__(self, url: str, publishable_key: str) -> None:
+        self._url = url.rstrip("/")
+        self._key = publishable_key
+        self.configured = bool(self._url and self._key)
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "AuthClient":
+        source = os.environ if env is None else env
+        return cls(source.get("SUPABASE_URL", ""), source.get("SUPABASE_PUBLISHABLE_KEY", ""))
+
+    def _request(self, method: str, path: str, payload: dict[str, object] | None = None, token: str | None = None) -> dict[str, object]:
+        if not self.configured:
+            raise AuthError("auth not configured")
+        headers = {"apikey": self._key}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        data = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(f"{self._url}/auth/v1{path}", data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read() or b"{}")
+        except (urllib.error.HTTPError, urllib.error.URLError, ValueError) as err:
+            raise AuthError("auth request failed") from err
+
+    def send_magic_link(self, email: str, callback_url: str) -> None:
+        self._request("POST", "/otp", {"email": email, "should_create_user": False, "email_redirect_to": callback_url})
+
+    def verify_magic_link(self, token_hash: str, token_type: str) -> str:
+        response = self._request("POST", "/verify", {"token_hash": token_hash, "type": token_type})
+        token = response.get("access_token")
+        if not isinstance(token, str) or not token:
+            raise AuthError("missing access token")
+        return token
+
+    def current_user(self, access_token: str) -> dict[str, object]:
+        response = self._request("GET", "/user", token=access_token)
+        if not isinstance(response.get("id"), str):
+            raise AuthError("missing user")
+        return response
 
 
 # --- Demo ledger -----------------------------------------------------------------------------
@@ -223,7 +291,108 @@ def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:
     return DemoLedger()
 
 
-# --- Roster ------------------------------------------------------------------------------------
+# --- Ingest buffer (local AI push) -----------------------------------------------------------
+
+def ingest_agent_keys(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return a valid per-agent ingest registry, or disable ingest on bad configuration."""
+    raw = (os.environ if env is None else env).get("INGEST_AGENT_KEYS", "")
+    try:
+        configured = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(configured, dict) or not configured:
+        return {}
+
+    keys: dict[str, str] = {}
+    secrets: set[str] = set()
+    for agent, secret in configured.items():
+        if not isinstance(agent, str) or not agent.strip() or not isinstance(secret, str) or not secret:
+            return {}
+        if secret in secrets:
+            return {}
+        keys[agent] = secret
+        secrets.add(secret)
+    return keys
+
+
+def agent_for_ingest_token(authorization: str, keys: Mapping[str, str]) -> str | None:
+    """Resolve a Bearer token to its configured agent without exposing key material."""
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    matches = [agent for agent, secret in keys.items() if hmac.compare_digest(token, secret)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _init_ingest_db(path: Path | None = None) -> None:
+    conn = sqlite3.connect(str(path or INGEST_DB_PATH))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ingest ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts TEXT NOT NULL, agent TEXT NOT NULL, kind TEXT NOT NULL, "
+            "summary TEXT NOT NULL, source TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ingest_event(source: str, agent: str, kind: str, summary: str, ts: str | None = None) -> Event:
+    _init_ingest_db()
+    if ts is None:
+        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = sqlite3.connect(str(INGEST_DB_PATH))
+    try:
+        cur = conn.execute(
+            "INSERT INTO ingest (ts, agent, kind, summary, source) VALUES (?,?,?,?,?)",
+            (ts, agent, kind, summary, source),
+        )
+        row_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return Event(id=row_id, ts=ts, agent=agent, kind=kind, summary=summary)
+
+
+def ingest_events(after: int = 0, limit: int = MAX_LIMIT) -> list[Event]:
+    _init_ingest_db()
+    conn = sqlite3.connect(str(INGEST_DB_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, agent, kind, summary FROM ingest WHERE id > ? ORDER BY id DESC LIMIT ?",
+            (after, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [Event(int(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4])) for r in rows]
+
+
+# --- Ledger wrapper that merges ingest buffer -----------------------------------------------
+
+class MergedLedger:
+    """Wraps a base ledger and merges in locally ingested events."""
+
+    def __init__(self, base: Ledger) -> None:
+        self._base = base
+        self.source = base.source
+
+    def events(self, after: int, limit: int) -> list[Event]:
+        base_events = self._base.events(after, limit)
+        local_after = max(after - LOCAL_EVENT_ID_OFFSET, 0) if after >= LOCAL_EVENT_ID_OFFSET else 0
+        local_events = [
+            Event(LOCAL_EVENT_ID_OFFSET + event.id, event.ts, event.agent, event.kind, event.summary)
+            for event in ingest_events(local_after, limit)
+        ]
+        return sorted([*base_events, *local_events], key=lambda event: (event.ts, event.id), reverse=True)[:limit]
+
+    def roster(self) -> list[dict[str, str]]:
+        return self._base.roster()
+
+    def operations(self) -> dict[str, object]:
+        return self._base.operations()
 
 
 def load_roster(path: Path = ROSTER_PATH) -> list[dict[str, str]]:
@@ -257,7 +426,7 @@ def _parse_int(value: str | None, default: int, low: int, high: int) -> int:
     return min(max(n, low), high)
 
 
-def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTTPRequestHandler]:
+def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = None) -> type[BaseHTTPRequestHandler]:
     static_root = static_dir.resolve()
 
     class Handler(BaseHTTPRequestHandler):
@@ -270,13 +439,25 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTT
             path = parsed.path
             if path == "/health":
                 self._json(200, {"status": "ok", "service": SERVICE, "version": version})
+            elif path == "/auth/callback":
+                self._callback(query)
+            elif path == "/login" or path.startswith("/assets/"):
+                self._static(path)
+            elif path == "/api/auth/me":
+                user = self._current_user()
+                if user is not None:
+                    self._json(200, {"user": {"id": user["id"], "email": user.get("email")}})
             elif path == "/api/feed":
+                if self._current_user() is None:
+                    return
                 after = _parse_int(query.get("after", [None])[0], 0, 0, 2**62)
                 limit = _parse_int(query.get("limit", [None])[0], 50, 1, MAX_LIMIT)
                 self._ledger_call(
                     lambda: {"source": ledger.source, "events": [asdict(e) for e in ledger.events(after, limit)]}
                 )
             elif path == "/api/roster":
+                if self._current_user() is None:
+                    return
                 self._ledger_call(
                     lambda: {
                         "source": ledger.source,
@@ -288,11 +469,103 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTT
                     }
                 )
             elif path == "/api/operations":
+                if self._current_user() is None:
+                    return
                 self._ledger_call(lambda: {"source": ledger.source, **ledger.operations()})
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:
+                if self._current_user(redirect=True) is None:
+                    return
                 self._static(path)
+
+        def do_POST(self) -> None:
+            path = urllib.parse.urlsplit(self.path).path
+            if path == "/auth/magic-link":
+                self._magic_link()
+            elif path == "/auth/sign-out":
+                self._sign_out()
+            elif path == "/api/ingest":
+                self._ingest()
+            else:
+                self._json(404, {"error": "not found"})
+
+        def _current_user(self, redirect: bool = False) -> dict[str, object] | None:
+            if auth is None or not auth.configured:
+                self._json(503, {"error": "authentication unavailable"})
+                return None
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get("Cookie", ""))
+            session = cookie.get("bastion_session")
+            if session is None:
+                if redirect:
+                    self._redirect("/login")
+                else:
+                    self._json(401, {"error": "authentication required"})
+                return None
+            try:
+                return auth.current_user(session.value)
+            except AuthError:
+                if redirect:
+                    self._redirect("/login")
+                else:
+                    self._json(401, {"error": "authentication required"})
+                return None
+
+        def _magic_link(self) -> None:
+            if auth is None or not auth.configured:
+                self._json(503, {"error": "authentication unavailable"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                data = json.loads(self.rfile.read(length)) if length else {}
+                email = data.get("email")
+                if not isinstance(email, str) or not email.strip():
+                    raise ValueError
+                host = self.headers.get("Host", "")
+                if not host:
+                    raise ValueError
+                auth.send_magic_link(email.strip(), f"https://{host}/auth/callback")
+            except (AuthError, ValueError, json.JSONDecodeError):
+                self._json(400, {"error": "unable to send sign-in link"})
+                return
+            self._json(202, {"status": "check your email"})
+
+        def _callback(self, query: dict[str, list[str]]) -> None:
+            if auth is None or not auth.configured:
+                self._redirect("/login?error=link")
+                return
+            token_hash = query.get("token_hash", [""])[0]
+            token_type = query.get("type", [""])[0]
+            try:
+                access_token = auth.verify_magic_link(token_hash, token_type)
+            except AuthError:
+                self._redirect("/login?error=link")
+                return
+            self._redirect("/", {"Set-Cookie": f"bastion_session={access_token}; HttpOnly; Secure; SameSite=Lax; Path=/"})
+
+        def _sign_out(self) -> None:
+            self._send(204, "text/plain; charset=utf-8", b"", headers={"Set-Cookie": "bastion_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0"})
+
+        def _ingest(self) -> None:
+            agent = agent_for_ingest_token(self.headers.get("Authorization", ""), ingest_agent_keys())
+            if agent is None:
+                self._json(401, {"error": "invalid or missing API key"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                data = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json(400, {"error": "invalid JSON"})
+                return
+            source = str(data.get("source", "unknown"))
+            kind = str(data.get("kind", "event"))
+            summary = str(data.get("summary", ""))
+            if not summary:
+                self._json(400, {"error": "summary required"})
+                return
+            event = ingest_event(source, agent, kind, summary, data.get("ts"))
+            self._json(201, {"id": event.id, "ts": event.ts})
 
         def _ledger_call(self, build: Any) -> None:
             try:
@@ -323,7 +596,15 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTT
         def _json(self, status: int, payload: object) -> None:
             self._send(status, "application/json", json.dumps(payload).encode("utf-8"))
 
-        def _send(self, status: int, content_type: str, body: bytes, cache: str = "no-store") -> None:
+        def _redirect(self, location: str, headers: Mapping[str, str] | None = None) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+
+        def _send(self, status: int, content_type: str, body: bytes, cache: str = "no-store", headers: Mapping[str, str] | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -331,6 +612,8 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTT
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy", CSP)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -347,8 +630,9 @@ def build_server(
     host: str = "0.0.0.0",
     ledger: Ledger | None = None,
     static_dir: Path = STATIC_DIR,
+    auth: Auth | None = None,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(version, ledger or ledger_from_env(), static_dir)
+    handler = make_handler(version, MergedLedger(ledger or ledger_from_env()), static_dir, auth or AuthClient.from_env())
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

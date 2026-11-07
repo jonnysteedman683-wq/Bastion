@@ -17,6 +17,38 @@ In production it reads the UniSync ledger as `bastion_reader` through the `LEDGE
 never in the repo): a `postgresql://` URL for Supabase's session pooler. The role is read-only, times out after 5 s,
 and sees one-line summaries only, never event bodies or tokens.
 
+## Agent ingest
+
+Private agents can report lifecycle events to `POST /api/ingest`. Configure a distinct secret for each allowed agent
+in the service environment; never place this value in the repository:
+
+```text
+INGEST_AGENT_KEYS={"researcher-01":"replace-with-a-secret","writer-02":"replace-with-a-different-secret"}
+```
+
+An agent sends its own key as a Bearer token. Bastion derives the agent name from that key, so an `agent` field in
+the request body is ignored. The body accepts `source`, `kind`, `summary`, and an optional UTC `ts`; `summary` is
+required. For example, substitute the appropriate agent-specific secret at deployment time:
+
+```bash
+curl --request POST http://localhost:8080/api/ingest \
+  --header 'Authorization: Bearer <agent-specific-secret>' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"local-host","kind":"task.completed","summary":"Indexed 24 documents"}'
+```
+
+Removing an agent from `INGEST_AGENT_KEYS` revokes its access; replacing only its value rotates its key. Keep the
+command centre private: agents receive the ingest endpoint and their own secret, never database credentials.
+
+## Sign-in
+
+The command centre requires an existing Supabase Auth user. Configure `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` as service secrets; these identify the Auth project but are never
+sent to the browser. Before deployment, add `https://<command-centre-host>/auth/callback` to
+Supabase Auth's allowed redirect URLs and update the Magic Link template to link to
+`/auth/callback?token_hash={{ .TokenHash }}&type=email`. The service requests links with user
+creation disabled, so create authorised users in Supabase first.
+
 ## Run locally
 
 ```bash

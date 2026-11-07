@@ -15,7 +15,7 @@ Exit: `hello` deploys, and a failed health check leaves the previous revision se
 ## M1 · First summon
 Exit: summon to live result on the dashboard with no API key, at $0.
 
-- [ ] S1 Command centre v0: shadcn-admin shell, roster, live ledger feed (read-only Supabase role)
+- [x] S1 Command centre v0: shadcn-admin shell, roster, live ledger feed (read-only Supabase role)
 - [ ] S2 🔒 Cloudflare Access in front of the command centre
 - [x] S3 Summon: post a `task.request`, dispatch `sebastian demo` on GitHub Actions, show the result
 

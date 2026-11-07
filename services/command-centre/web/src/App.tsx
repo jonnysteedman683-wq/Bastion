@@ -1,5 +1,5 @@
 import { Activity, Bot, LayoutDashboard, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -8,8 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useFeed, useNow, useOperations, useRoster } from "@/hooks";
 import { isSafeGithubUrl, timeAgo, type Agent, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
+import { requestMagicLink, signOut } from "@/lib/auth";
 
-type View = "operations" | "roster" | "ledger";
+export type View = "operations" | "roster" | "ledger";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
@@ -18,6 +19,7 @@ const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
 ];
 
 export default function App() {
+  if (window.location.pathname === "/login") return <Login />;
   const [view, setView] = useState<View>("operations");
   const feed = useFeed();
   const roster = useRoster();
@@ -55,6 +57,7 @@ export default function App() {
         <header className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{NAV.find((n) => n.id === view)?.label}</h1>
           <SourceBadge source={source} />
+          <button className="ml-auto text-sm text-muted-foreground underline" onClick={() => void signOut().then(() => window.location.assign("/login"))}>Sign out</button>
         </header>
         {(feed.error || roster.error || operations.error) && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
@@ -68,6 +71,24 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+function Login() {
+  const [email, setEmail] = useState("");
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setState("sending");
+    try {
+      await requestMagicLink(email);
+      setState("sent");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return <main className="mx-auto flex min-h-svh max-w-md items-center p-6"><Card className="w-full"><CardHeader><CardTitle>Sign in to Bastion</CardTitle><CardDescription>Enter your approved email address and we’ll send a sign-in link.</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={submit}><label className="block text-sm font-medium" htmlFor="email">Email</label><input id="email" className="w-full rounded-md border bg-background px-3 py-2" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /><button className="w-full rounded-md bg-primary px-3 py-2 text-primary-foreground disabled:opacity-60" disabled={state === "sending"}>{state === "sending" ? "Sending…" : "Email me a sign-in link"}</button>{state === "sent" && <p className="text-sm text-muted-foreground">If the account is eligible, a sign-in link has been sent.</p>}{state === "error" && <p className="text-sm text-destructive">We couldn’t send that link. Please try again.</p>}</form></CardContent></Card></main>;
 }
 
 function Operations({ data, now }: { data: OperationsResponse | null; now: Date }) {

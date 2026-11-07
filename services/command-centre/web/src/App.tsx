@@ -5,23 +5,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useFeed, useNow, useRoster } from "@/hooks";
-import { timeAgo, type Agent, type LedgerEvent } from "@/lib/ledger";
+import { useFeed, useNow, useOperations, useRoster } from "@/hooks";
+import { isSafeGithubUrl, timeAgo, type Agent, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
 
-type View = "overview" | "roster" | "ledger";
+type View = "operations" | "roster" | "ledger";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
+  { id: "operations", label: "Operations", icon: LayoutDashboard },
   { id: "roster", label: "Roster", icon: Bot },
   { id: "ledger", label: "Ledger", icon: ScrollText },
 ];
 
 export default function App() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>("operations");
   const feed = useFeed();
   const roster = useRoster();
   const now = useNow();
+  const operations = useOperations();
   const source = feed.source ?? roster.data?.source ?? null;
 
   return (
@@ -61,21 +62,34 @@ export default function App() {
           </div>
         )}
 
-        {view === "overview" && (
-          <>
-            <Stats agents={roster.data?.agents} events={feed.events} now={now} />
-            <div className="grid gap-6 lg:grid-cols-5">
-              <RosterCard agents={roster.data?.agents} now={now} compact className="min-w-0 lg:col-span-2" />
-              <FeedCard events={feed.events} now={now} limit={12} className="min-w-0 lg:col-span-3" />
-            </div>
-          </>
-        )}
+        {view === "operations" && <Operations data={operations.data} now={now} />}
         {view === "roster" && <RosterCard agents={roster.data?.agents} now={now} />}
         {view === "ledger" && <FeedCard events={feed.events} now={now} />}
       </main>
     </div>
   );
 }
+
+function Operations({ data, now }: { data: OperationsResponse | null; now: Date }) {
+  if (!data) return <Skeleton className="h-96 w-full" />;
+  const counts = data.tasks.reduce<Record<string, number>>((all, task) => ({ ...all, [task.status]: (all[task.status] ?? 0) + 1 }), {});
+  return <div className="space-y-6">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <Metric label="Needs attention" value={data.attention.length} />
+      <Metric label="Completed" value={counts.done ?? 0} />
+      <Metric label="In progress" value={(counts.open ?? 0) + (counts.claimed ?? 0)} />
+      <Metric label="Open PRs" value={data.pr_report?.items.length ?? 0} />
+    </div>
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card><CardHeader><CardTitle>Attention now</CardTitle><CardDescription>Blocked work and decisions that need you.</CardDescription></CardHeader><CardContent>{data.attention.length ? <ul className="space-y-3">{data.attention.map((item, i) => <li key={i}><Badge variant="outline" className="mr-2 border-red-500/40 text-red-700">{item.kind}</Badge><span className="font-medium">{item.title}</span><p className="mt-1 text-sm text-muted-foreground">{item.detail}</p></li>)}</ul> : <p className="text-sm text-muted-foreground">Nothing needs attention.</p>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Goal progress</CardTitle><CardDescription>Tracked work by lifecycle status.</CardDescription></CardHeader><CardContent><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([status, count]) => <Badge key={status} variant="secondary">{status}: {count}</Badge>)}</div><ul className="mt-4 space-y-2">{data.tasks.slice(0, 8).map(task => <li key={task.task_id} className="flex justify-between gap-3 text-sm"><span>{task.title}</span><span className="text-muted-foreground">{task.status}</span></li>)}</ul></CardContent></Card>
+      <Card><CardHeader><CardTitle>Pending merge requests</CardTitle><CardDescription>{data.pr_report ? `Scanned ${timeAgo(data.pr_report.scanned_ts, now)}` : "No PR report received yet."}</CardDescription></CardHeader><CardContent>{data.pr_report ? <ul className="space-y-3">{data.pr_report.items.map(pr => <li key={pr.pr} className="text-sm"><Badge variant="outline" className="mr-2">{pr.bucket}</Badge>{isSafeGithubUrl(pr.url) ? <a className="font-medium underline" href={pr.url}>{pr.pr}</a> : <span className="font-medium">{pr.pr}</span>}<span className="ml-2 text-muted-foreground">{pr.note}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">The PR steward has not reported yet.</p>}</CardContent></Card>
+      <FeedCard events={data.completions} now={now} limit={8} />
+    </div>
+  </div>;
+}
+
+function Metric({ label, value }: { label: string; value: number }) { return <Card className="gap-2 py-4"><CardHeader className="px-4"><CardDescription>{label}</CardDescription></CardHeader><CardContent className="px-4 text-2xl font-semibold tabular-nums">{value}</CardContent></Card>; }
 
 function SourceBadge({ source }: { source: "demo" | "ledger" | null }) {
   if (!source) return null;
@@ -87,34 +101,6 @@ function SourceBadge({ source }: { source: "demo" | "ledger" | null }) {
     <Badge variant="secondary" title="No ledger connected yet. These events are generated for the demo.">
       Demo data
     </Badge>
-  );
-}
-
-function Stats({ agents, events, now }: { agents?: Agent[]; events: LedgerEvent[]; now: Date }) {
-  const dayAgo = now.getTime() - 86_400_000;
-  const today = events.filter((e) => new Date(e.ts).getTime() >= dayAgo);
-  const items = [
-    { label: "Agents active", value: agents ? `${agents.filter((a) => a.status === "active").length} / ${agents.length}` : null },
-    { label: "Events, last 24h", value: String(today.length) },
-    { label: "Task requests, last 24h", value: String(today.filter((e) => e.kind === "task.request").length) },
-    {
-      label: "Failures, last 24h",
-      value: String(today.filter((e) => e.kind === "task.failed" || e.kind === "escalate").length),
-    },
-  ];
-  return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-      {items.map((it) => (
-        <Card key={it.label} className="gap-2 py-4">
-          <CardHeader className="px-4">
-            <CardDescription>{it.label}</CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 text-2xl font-semibold tabular-nums">
-            {it.value ?? <Skeleton className="h-8 w-16" />}
-          </CardContent>
-        </Card>
-      ))}
-    </div>
   );
 }
 

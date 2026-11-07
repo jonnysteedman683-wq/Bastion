@@ -75,6 +75,27 @@ select task_id, title, requested_by, agent, status, mode, run_url, requested_ts,
   finished_ts, updated_ts, detail
 from bastion.tasks;
 
+create or replace view bastion.steward_report as
+select
+  to_char(coalesce(to_timestamp(e.ts), e.inserted) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as scanned_ts,
+  left(coalesce(e.body->>'summary', ''), 200) as summary,
+  coalesce(e.body->'counts', '{}'::jsonb) as counts,
+  coalesce(e.body->'floods', '{}'::jsonb) as floods,
+  coalesce((
+    select jsonb_agg(jsonb_build_object(
+      'pr', left(coalesce(item->>'pr', ''), 120),
+      'url', left(coalesce(item->>'url', ''), 500),
+      'bucket', left(coalesce(item->>'bucket', ''), 40),
+      'flags', coalesce(item->'flags', '[]'::jsonb),
+      'note', left(coalesce(item->>'note', ''), 200)
+    ))
+    from (select item from jsonb_array_elements(coalesce(e.body->'items', '[]'::jsonb)) item limit 60) bounded_items
+  ), '[]'::jsonb) as items,
+  coalesce((e.body->>'truncated')::integer, 0) as truncated
+from public.unisync_events e
+where e.sender = 'steward' and e.kind = 'heartbeat' and e.body->>'flow' = 'pr-steward'
+order by e.seq desc limit 1;
+
 -- Kill switch, as LinX's control.halt_state(): only the owner's linx/control/halt memory writes count.
 create or replace view bastion.control as
 with last as (
@@ -89,5 +110,5 @@ select
   (select v->>'reason' from last) as reason,
   (select to_char(t at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') from last) as since;
 
-revoke all on bastion.tasks, bastion.dashboard_tasks, bastion.control from public, anon, authenticated;
-grant select on bastion.tasks, bastion.dashboard_tasks, bastion.control to bastion_reader;
+revoke all on bastion.tasks, bastion.dashboard_tasks, bastion.steward_report, bastion.control from public, anon, authenticated;
+grant select on bastion.tasks, bastion.dashboard_tasks, bastion.steward_report, bastion.control to bastion_reader;

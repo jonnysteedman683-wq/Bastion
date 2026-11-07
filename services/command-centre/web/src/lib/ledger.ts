@@ -20,6 +20,27 @@ export type Agent = {
 
 export type RosterResponse = { source: "demo" | "ledger"; agents: Agent[] };
 
+export type OperationTask = { task_id: string; title: string; status: string; agent: string; updated_ts: string; detail?: string };
+export type AttentionItem = { kind: string; title: string; detail: string };
+export type OperationsResponse = {
+  source: "demo" | "ledger";
+  generated_at: string;
+  attention: AttentionItem[];
+  tasks: OperationTask[];
+  pr_report: { scanned_ts: string; summary: string; items: { pr: string; url: string; bucket: string; flags: string[]; note: string }[] } | null;
+  completions: LedgerEvent[];
+  control: { halted: boolean; reason: string | null; since: string | null };
+};
+
+export function isSafeGithubUrl(value: string | null): boolean {
+  try {
+    const url = new URL(value ?? "");
+    return url.protocol === "https:" && url.hostname === "github.com";
+  } catch {
+    return false;
+  }
+}
+
 /** Merge newly fetched events into the feed: newest first, no duplicates, at most `cap` kept. */
 export function mergeEvents(current: LedgerEvent[], incoming: LedgerEvent[], cap = 200): LedgerEvent[] {
   const byId = new Map<number, LedgerEvent>();

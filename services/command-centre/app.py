@@ -65,6 +65,8 @@ class Ledger(Protocol):
         """Every agent: name, role, runs_on."""
         ...
 
+    def operations(self) -> dict[str, object]: ...
+
 
 # --- Demo ledger -----------------------------------------------------------------------------
 
@@ -102,6 +104,21 @@ class DemoLedger:
         latest = int((self._clock() - DEMO_EPOCH) / DEMO_STEP)
         start = max(after + 1, latest - limit + 1, 0)
         return [self._event(n) for n in range(latest, start - 1, -1)]
+
+    def operations(self) -> dict[str, object]:
+        now = self._clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+        tasks = [
+            {"task_id": "demo-approval", "title": "Deploy hello", "status": "awaiting_approval", "agent": "Quartermaster", "updated_ts": now, "detail": "Owner approval required"},
+            {"task_id": "demo-complete", "title": "Run nightly demo", "status": "done", "agent": "Sebastian", "updated_ts": now, "detail": "3 checks passed"},
+        ]
+        return {
+            "generated_at": now,
+            "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
+            "tasks": tasks,
+            "pr_report": None,
+            "completions": [{"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished: 3 checks passed", "ts": now}],
+            "control": {"halted": False, "reason": None, "since": None},
+        }
 
 
 # --- UniSync ledger (Supabase Postgres) -----------------------------------------------------
@@ -172,6 +189,15 @@ class PostgresLedger:
     def dashboard_tasks(self, limit: int = 100) -> list[dict[str, str]]:
         fields = ("task_id", "title", "requested_by", "agent", "status", "mode", "run_url", "requested_ts", "claimed_ts", "finished_ts", "updated_ts", "detail")
         return [dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True)) for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)]
+
+    def operations(self) -> dict[str, object]:
+        tasks = self.dashboard_tasks()
+        attention = [
+            {"kind": task["status"], "title": task["title"], "detail": task["detail"]}
+            for task in tasks if task["status"] in {"failed", "awaiting_approval"}
+        ]
+        completions = [asdict(event) for event in self.events(0, 50) if event.kind in {"task.result", "deploy.record"}]
+        return {"generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "attention": attention, "tasks": tasks, "pr_report": None, "completions": completions, "control": {"halted": False, "reason": None, "since": None}}
 
 
 def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:
@@ -246,6 +272,8 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path) -> type[BaseHTT
                         ),
                     }
                 )
+            elif path == "/api/operations":
+                self._ledger_call(lambda: {"source": ledger.source, **ledger.operations()})
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:

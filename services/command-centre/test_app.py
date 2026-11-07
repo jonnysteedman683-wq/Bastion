@@ -31,6 +31,16 @@ class FixedLedger:
     def roster(self) -> list[dict[str, str]]:
         return app.load_roster()
 
+    def operations(self) -> dict[str, object]:
+        return {
+            "generated_at": "2026-11-04T12:00:00Z",
+            "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
+            "tasks": [{"task_id": "demo-1", "title": "Run demo", "status": "done", "agent": "Sebastian", "updated_ts": "2026-11-04T11:00:00Z"}],
+            "pr_report": None,
+            "completions": [{"agent": "Sebastian", "kind": "task.result", "summary": "Demo finished", "ts": "2026-11-04T11:00:00Z"}],
+            "control": {"halted": False, "reason": None, "since": None},
+        }
+
 
 def ev(i: int, agent: str = "Sebastian", ts: str = "2026-11-04T11:30:00Z", kind: str = "task.request") -> app.Event:
     return app.Event(i, ts, agent, kind, f"event {i}")
@@ -95,6 +105,14 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([a["name"] for a in agents], [a["name"] for a in app.load_roster()])
         self.assertEqual(set(agents[0]), {"name", "role", "runs_on", "last_seen", "status"})
+
+    def test_operations_is_bounded_and_never_exposes_output(self) -> None:
+        status, _, body = self.get("/api/operations")
+        data = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["source"], "ledger")
+        self.assertEqual(data["attention"][0]["kind"], "awaiting_approval")
+        self.assertNotIn("output", data["tasks"][0])
 
     def test_ledger_failure_is_502_not_a_crash(self) -> None:
         self.ledger.fail = True

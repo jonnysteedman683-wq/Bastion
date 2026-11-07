@@ -5,6 +5,8 @@
 -- ('' -> open | awaiting_approval -> approved | rejected -> claimed -> done | failed),
 -- plus its timeline (requested, claimed, finished), the run link, the mode and the last outcome's text.
 -- SECURITY DEFINER so bastion_reader sees this without any access to unisync_events itself.
+drop view if exists bastion.dashboard_tasks;
+drop view if exists bastion.steward_report;
 drop view if exists bastion.tasks;
 drop function if exists bastion.task_states();
 

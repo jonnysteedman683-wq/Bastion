@@ -56,9 +56,9 @@ export default function App() {
           <h1 className="text-2xl font-semibold tracking-tight">{NAV.find((n) => n.id === view)?.label}</h1>
           <SourceBadge source={source} />
         </header>
-        {(feed.error || roster.error) && (
+        {(feed.error || roster.error || operations.error) && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error}
+            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error}
           </div>
         )}
 
@@ -73,6 +73,7 @@ export default function App() {
 function Operations({ data, now }: { data: OperationsResponse | null; now: Date }) {
   if (!data) return <Skeleton className="h-96 w-full" />;
   const counts = data.tasks.reduce<Record<string, number>>((all, task) => ({ ...all, [task.status]: (all[task.status] ?? 0) + 1 }), {});
+  const staleReport = data.pr_report && now.getTime() - new Date(data.pr_report.scanned_ts).getTime() > 26 * 60 * 60 * 1000;
   return <div className="space-y-6">
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
       <Metric label="Needs attention" value={data.attention.length} />
@@ -83,7 +84,7 @@ function Operations({ data, now }: { data: OperationsResponse | null; now: Date 
     <div className="grid gap-6 lg:grid-cols-2">
       <Card><CardHeader><CardTitle>Attention now</CardTitle><CardDescription>Blocked work and decisions that need you.</CardDescription></CardHeader><CardContent>{data.attention.length ? <ul className="space-y-3">{data.attention.map((item, i) => <li key={i}><Badge variant="outline" className="mr-2 border-red-500/40 text-red-700">{item.kind}</Badge><span className="font-medium">{item.title}</span><p className="mt-1 text-sm text-muted-foreground">{item.detail}</p></li>)}</ul> : <p className="text-sm text-muted-foreground">Nothing needs attention.</p>}</CardContent></Card>
       <Card><CardHeader><CardTitle>Goal progress</CardTitle><CardDescription>Tracked work by lifecycle status.</CardDescription></CardHeader><CardContent><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([status, count]) => <Badge key={status} variant="secondary">{status}: {count}</Badge>)}</div><ul className="mt-4 space-y-2">{data.tasks.slice(0, 8).map(task => <li key={task.task_id} className="flex justify-between gap-3 text-sm"><span>{task.title}</span><span className="text-muted-foreground">{task.status}</span></li>)}</ul></CardContent></Card>
-      <Card><CardHeader><CardTitle>Pending merge requests</CardTitle><CardDescription>{data.pr_report ? `Scanned ${timeAgo(data.pr_report.scanned_ts, now)}` : "No PR report received yet."}</CardDescription></CardHeader><CardContent>{data.pr_report ? <ul className="space-y-3">{data.pr_report.items.map(pr => <li key={pr.pr} className="text-sm"><Badge variant="outline" className="mr-2">{pr.bucket}</Badge>{isSafeGithubUrl(pr.url) ? <a className="font-medium underline" href={pr.url}>{pr.pr}</a> : <span className="font-medium">{pr.pr}</span>}<span className="ml-2 text-muted-foreground">{pr.note}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">The PR steward has not reported yet.</p>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Pending merge requests</CardTitle><CardDescription>{data.pr_report ? `${staleReport ? "Report is stale — " : ""}Scanned ${timeAgo(data.pr_report.scanned_ts, now)}` : "No PR report received yet."}</CardDescription></CardHeader><CardContent>{data.pr_report ? <ul className="space-y-3">{data.pr_report.items.map(pr => <li key={pr.pr} className="text-sm"><Badge variant="outline" className="mr-2">{pr.bucket}</Badge>{isSafeGithubUrl(pr.url) ? <a className="font-medium underline" href={pr.url}>{pr.pr}</a> : <span className="font-medium">{pr.pr}</span>}<span className="ml-2 text-muted-foreground">{pr.note}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">The PR steward has not reported yet.</p>}</CardContent></Card>
       <FeedCard events={data.completions} now={now} limit={8} />
     </div>
   </div>;

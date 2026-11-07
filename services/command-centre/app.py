@@ -158,6 +158,8 @@ DASHBOARD_TASKS_SQL = (
     "SELECT task_id, title, requested_by, agent, status, mode, run_url, requested_ts, claimed_ts, "
     "finished_ts, updated_ts, detail FROM bastion.dashboard_tasks ORDER BY updated_ts DESC LIMIT :limit"
 )
+STEWARD_REPORT_SQL = "SELECT scanned_ts, summary, counts, floods, items, truncated FROM bastion.steward_report LIMIT 1"
+CONTROL_SQL = "SELECT halted, reason, since FROM bastion.control LIMIT 1"
 
 
 class PostgresLedger:
@@ -196,8 +198,21 @@ class PostgresLedger:
             {"kind": task["status"], "title": task["title"], "detail": task["detail"]}
             for task in tasks if task["status"] in {"failed", "awaiting_approval"}
         ]
+        report_rows = self._run(STEWARD_REPORT_SQL)
+        report = None
+        if report_rows:
+            scanned_ts, summary, counts, floods, items, truncated = report_rows[0]
+            decode = lambda value, default: json.loads(value) if isinstance(value, str) else (value or default)
+            report = {"scanned_ts": str(scanned_ts), "summary": str(summary), "counts": decode(counts, {}), "floods": decode(floods, {}), "items": decode(items, []), "truncated": int(truncated or 0)}
+        control_rows = self._run(CONTROL_SQL)
+        control = {"halted": False, "reason": None, "since": None}
+        if control_rows:
+            halted, reason, since = control_rows[0]
+            control = {"halted": bool(halted), "reason": None if reason is None else str(reason), "since": None if since is None else str(since)}
+            if control["halted"]:
+                attention.insert(0, {"kind": "halted", "title": "Fleet halted", "detail": control["reason"] or "The owner halted the fleet"})
         completions = [asdict(event) for event in self.events(0, 50) if event.kind in {"task.result", "deploy.record"}]
-        return {"generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "attention": attention, "tasks": tasks, "pr_report": None, "completions": completions, "control": {"halted": False, "reason": None, "since": None}}
+        return {"generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "attention": attention, "tasks": tasks, "pr_report": report, "completions": completions, "control": control}
 
 
 def ledger_from_env(env: dict[str, str] | None = None) -> Ledger:

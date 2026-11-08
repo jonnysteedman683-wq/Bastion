@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import type { SpendResponse } from "@/lib/spend";
 import { cursorOf, getJSON, mergeEvents, type ApprovalsResponse, type FeedResponse, type LedgerEvent, type OperationsResponse, type RosterResponse } from "@/lib/ledger";
 
 const FEED_POLL_MS = 5_000;
 const ROSTER_POLL_MS = 30_000;
+const SPEND_POLL_MS = 60_000;
 
 /** Live ledger feed: loads the latest events, then polls for newer ones. */
 export function useFeed() {
@@ -90,6 +92,23 @@ export function useApprovals() {
       try { setData(await getJSON<ApprovalsResponse>("/api/approvals", ctrl.signal)); setError(null); }
       catch (err) { if (!ctrl.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
       if (!ctrl.signal.aborted) timer = window.setTimeout(tick, FEED_POLL_MS);
+    };
+    void tick();
+    return () => { ctrl.abort(); window.clearTimeout(timer); };
+  }, []);
+  return { data, error };
+}
+
+export function useSpend() {
+  const [data, setData] = useState<SpendResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    let timer: number | undefined;
+    const tick = async () => {
+      try { setData(await getJSON<SpendResponse>("/api/spend", ctrl.signal)); setError(null); }
+      catch (err) { if (!ctrl.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
+      if (!ctrl.signal.aborted) timer = window.setTimeout(tick, SPEND_POLL_MS);
     };
     void tick();
     return () => { ctrl.abort(); window.clearTimeout(timer); };

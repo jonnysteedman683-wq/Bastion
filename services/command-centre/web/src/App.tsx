@@ -1,20 +1,25 @@
-import { Activity, Bot, Check, ClipboardCopy, Inbox, LayoutDashboard, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { FormEvent, Suspense, lazy, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useFeed, useNow, useOperations, useRoster } from "@/hooks";
+import { useApprovals, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+
 import { isOverdue, isSafeGithubUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
-export type View = "operations" | "approvals" | "roster" | "ledger";
+// Recharts is heavy: load the Spend view, and the chart library with it, only when it is opened.
+const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
+
+export type View = "operations" | "approvals" | "spend" | "roster" | "ledger";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
   { id: "approvals", label: "Approvals", icon: Inbox },
+  { id: "spend", label: "Spend", icon: Coins },
   { id: "roster", label: "Roster", icon: Bot },
   { id: "ledger", label: "Ledger", icon: ScrollText },
 ];
@@ -27,6 +32,7 @@ export default function App() {
   const now = useNow();
   const operations = useOperations();
   const approvals = useApprovals();
+  const spend = useSpend();
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
@@ -67,9 +73,9 @@ export default function App() {
           <SourceBadge source={source} />
           <button className="ml-auto text-sm text-muted-foreground underline" onClick={() => void signOut().then(() => window.location.assign("/login"))}>Sign out</button>
         </header>
-        {(feed.error || roster.error || operations.error || approvals.error) && (
+        {(feed.error || roster.error || operations.error || approvals.error || spend.error) && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error ?? approvals.error}
+            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error ?? approvals.error ?? spend.error}
           </div>
         )}
 
@@ -77,6 +83,11 @@ export default function App() {
 
         {view === "operations" && <Operations data={operations.data} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
+        {view === "spend" && (
+          <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+            <SpendView data={spend.data} />
+          </Suspense>
+        )}
         {view === "roster" && <RosterCard agents={roster.data?.agents} now={now} />}
         {view === "ledger" && <FeedCard events={feed.events} now={now} />}
       </main>

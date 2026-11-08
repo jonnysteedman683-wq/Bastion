@@ -55,10 +55,20 @@ class FixedLedger:
     def approvals(self) -> list[dict[str, str]]:
         base = {"requested_by": "Lestinxor", "agent": "Sebastian", "mode": "demo", "run_url": "", "detail": ""}
         return [
-            {**base, "task_id": "t-1", "title": "Deploy hello", "requested_ts": "2026-11-04T09:00:00Z",
-             "updated_ts": "2026-11-04T09:00:00Z"},
-            {**base, "task_id": "x; rm -rf ~", "title": "Hostile id", "requested_ts": "2026-11-04T10:00:00Z",
-             "updated_ts": "2026-11-04T10:00:00Z"},
+            {
+                **base,
+                "task_id": "t-1",
+                "title": "Deploy hello",
+                "requested_ts": "2026-11-04T09:00:00Z",
+                "updated_ts": "2026-11-04T09:00:00Z",
+            },
+            {
+                **base,
+                "task_id": "x; rm -rf ~",
+                "title": "Hostile id",
+                "requested_ts": "2026-11-04T10:00:00Z",
+                "updated_ts": "2026-11-04T10:00:00Z",
+            },
         ]
 
 
@@ -429,8 +439,17 @@ class LinxCommandTest(unittest.TestCase):
 
 class PostgresLedgerTest(unittest.TestCase):
     def test_approvals_query_reads_only_pending_tasks_oldest_first(self) -> None:
-        row = ["t-1", "Deploy hello", "Lestinxor", "Sebastian", "demo", None,
-               "2026-11-04T09:00:00Z", "2026-11-04T09:00:00Z", None]
+        row = [
+            "t-1",
+            "Deploy hello",
+            "Lestinxor",
+            "Sebastian",
+            "demo",
+            None,
+            "2026-11-04T09:00:00Z",
+            "2026-11-04T09:00:00Z",
+            None,
+        ]
         conn = FakeConn([row])
         items = app.PostgresLedger(lambda: conn).approvals()
         sql = conn.calls[0][0]
@@ -440,6 +459,7 @@ class PostgresLedgerTest(unittest.TestCase):
         self.assertEqual(items[0]["task_id"], "t-1")
         self.assertEqual(items[0]["run_url"], "")
         self.assertNotIn("output", items[0])
+        self.assertIn(f"SELECT {', '.join(app.APPROVAL_FIELDS)} FROM", sql)
 
     def test_operations_task_query_excludes_output(self) -> None:
         conn = FakeConn(

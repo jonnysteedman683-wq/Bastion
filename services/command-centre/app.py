@@ -228,7 +228,6 @@ class DemoLedger:
             "control": {"halted": False, "reason": None, "since": None},
         }
 
-
     def approvals(self) -> list[dict[str, str]]:
         asked = (self._clock() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return [
@@ -286,8 +285,8 @@ DASHBOARD_TASKS_SQL = (
 STEWARD_REPORT_SQL = "SELECT scanned_ts, summary, counts, floods, items, truncated FROM bastion.steward_report LIMIT 1"
 CONTROL_SQL = "SELECT halted, reason, since FROM bastion.control LIMIT 1"
 APPROVALS_SQL = (
-    f"SELECT {', '.join(APPROVAL_FIELDS)} FROM bastion.dashboard_tasks "
-    "WHERE status = 'awaiting_approval' ORDER BY requested_ts ASC NULLS LAST LIMIT :limit"
+    "SELECT task_id, title, requested_by, agent, mode, run_url, requested_ts, updated_ts, detail "
+    "FROM bastion.dashboard_tasks WHERE status = 'awaiting_approval' ORDER BY requested_ts ASC NULLS LAST LIMIT :limit"
 )
 
 

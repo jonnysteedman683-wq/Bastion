@@ -4,6 +4,8 @@
     GET /api/roster    -> {"source": ..., "agents": [{name, role, runs_on, last_seen, status}]}
     GET /api/feed      -> {"source": ..., "events": [{id, ts, agent, kind, summary}]}, newest first
                           ?after=<id> returns only newer events; ?limit=<n> caps the count (max 200)
+    GET /api/approvals -> {"source": ..., "approvals": [{task_id, title, ..., approve_command, reject_command}]},
+                          oldest first. Read-only: the owner signs decisions with LinX on their own machine.
     GET /*             -> the web app (web/dist), with index.html for client-side routes
 
 The browser only ever talks to this server. The ledger is read server-side:
@@ -21,6 +23,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import signal
 import sqlite3
 import sys
@@ -45,6 +48,20 @@ ACTIVE_WITHIN = timedelta(hours=1)
 IDLE_WITHIN = timedelta(days=1)
 INGEST_DB_PATH = Path(os.environ.get("INGEST_DB", str(Path(__file__).resolve().parent / "ingest.db")))
 LOCAL_EVENT_ID_OFFSET = 10_000_000
+# Task ids come from agents, and the owner pastes the command into a shell: only plain ids get one.
+# The first character can't be '-', so an id can never be read as a LinX flag.
+SAFE_TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}")
+APPROVAL_FIELDS = (
+    "task_id",
+    "title",
+    "requested_by",
+    "agent",
+    "mode",
+    "run_url",
+    "requested_ts",
+    "updated_ts",
+    "detail",
+)
 
 # Only our own origin may load scripts, styles, data or frames. No inline script.
 CSP = (
@@ -74,6 +91,8 @@ class Ledger(Protocol):
         ...
 
     def operations(self) -> dict[str, object]: ...
+
+    def approvals(self) -> list[dict[str, str]]: ...
 
 
 class AuthError(Exception):
@@ -210,6 +229,23 @@ class DemoLedger:
         }
 
 
+    def approvals(self) -> list[dict[str, str]]:
+        asked = (self._clock() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return [
+            {
+                "task_id": "demo-approval",
+                "title": "Deploy hello",
+                "requested_by": "Quartermaster",
+                "agent": "Quartermaster",
+                "mode": "deploy",
+                "run_url": "",
+                "requested_ts": asked,
+                "updated_ts": asked,
+                "detail": "Owner approval required",
+            }
+        ]
+
+
 # --- UniSync ledger (Supabase Postgres) -----------------------------------------------------
 
 
@@ -249,6 +285,10 @@ DASHBOARD_TASKS_SQL = (
 )
 STEWARD_REPORT_SQL = "SELECT scanned_ts, summary, counts, floods, items, truncated FROM bastion.steward_report LIMIT 1"
 CONTROL_SQL = "SELECT halted, reason, since FROM bastion.control LIMIT 1"
+APPROVALS_SQL = (
+    f"SELECT {', '.join(APPROVAL_FIELDS)} FROM bastion.dashboard_tasks "
+    "WHERE status = 'awaiting_approval' ORDER BY requested_ts ASC NULLS LAST LIMIT :limit"
+)
 
 
 class PostgresLedger:
@@ -295,6 +335,12 @@ class PostgresLedger:
         return [
             dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True))
             for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)
+        ]
+
+    def approvals(self, limit: int = MAX_LIMIT) -> list[dict[str, str]]:
+        return [
+            dict(zip(APPROVAL_FIELDS, ("" if value is None else str(value) for value in row), strict=True))
+            for row in self._run(APPROVALS_SQL, limit=limit)
         ]
 
     def operations(self) -> dict[str, object]:
@@ -462,6 +508,16 @@ class MergedLedger:
     def operations(self) -> dict[str, object]:
         return self._base.operations()
 
+    def approvals(self) -> list[dict[str, str]]:
+        return self._base.approvals()
+
+
+def linx_commands(task_id: str) -> dict[str, str | None]:
+    """The LinX commands that decide a task, or None for ids that aren't safe to paste into a shell."""
+    if not SAFE_TASK_ID.fullmatch(task_id):
+        return {"approve_command": None, "reject_command": None}
+    return {"approve_command": f"linx approve {task_id}", "reject_command": f'linx reject {task_id} --reason "<why>"'}
+
 
 def load_roster(path: Path = ROSTER_PATH) -> list[dict[str, str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -540,6 +596,15 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                 if self._current_user() is None:
                     return
                 self._ledger_call(lambda: {"source": ledger.source, **ledger.operations()})
+            elif path == "/api/approvals":
+                if self._current_user() is None:
+                    return
+                self._ledger_call(
+                    lambda: {
+                        "source": ledger.source,
+                        "approvals": [{**item, **linx_commands(item["task_id"])} for item in ledger.approvals()],
+                    }
+                )
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:

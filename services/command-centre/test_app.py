@@ -52,6 +52,15 @@ class FixedLedger:
             "control": {"halted": False, "reason": None, "since": None},
         }
 
+    def approvals(self) -> list[dict[str, str]]:
+        base = {"requested_by": "Lestinxor", "agent": "Sebastian", "mode": "demo", "run_url": "", "detail": ""}
+        return [
+            {**base, "task_id": "t-1", "title": "Deploy hello", "requested_ts": "2026-11-04T09:00:00Z",
+             "updated_ts": "2026-11-04T09:00:00Z"},
+            {**base, "task_id": "x; rm -rf ~", "title": "Hostile id", "requested_ts": "2026-11-04T10:00:00Z",
+             "updated_ts": "2026-11-04T10:00:00Z"},
+        ]
+
 
 class FakeAuth:
     """Controlled Supabase Auth boundary for HTTP-server tests."""
@@ -303,6 +312,21 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(data["attention"][0]["kind"], "awaiting_approval")
         self.assertNotIn("output", data["tasks"][0])
 
+    def test_approvals_lists_pending_tasks_with_safe_linx_commands(self) -> None:
+        status, _, body = self.get("/api/approvals")
+        data = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["source"], "ledger")
+        first, hostile = data["approvals"]
+        self.assertEqual(first["task_id"], "t-1")
+        self.assertEqual(first["approve_command"], "linx approve t-1")
+        self.assertEqual(first["reject_command"], 'linx reject t-1 --reason "<why>"')
+        self.assertIsNone(hostile["approve_command"])
+        self.assertIsNone(hostile["reject_command"])
+
+    def test_approvals_requires_a_session(self) -> None:
+        self.assertEqual(self.get("/api/approvals", authenticated=False)[0], 401)
+
     def test_ledger_failure_is_502_not_a_crash(self) -> None:
         self.ledger.fail = True
         try:
@@ -372,6 +396,10 @@ class DemoLedgerTest(unittest.TestCase):
         clock[0] = NOW + app.DEMO_STEP * 2
         self.assertEqual([e.id for e in demo.events(first[0].id, 50)], [first[0].id + 2, first[0].id + 1])
 
+    def test_demo_has_a_pending_approval(self) -> None:
+        items = app.DemoLedger(lambda: NOW).approvals()
+        self.assertEqual([i["task_id"] for i in items], ["demo-approval"])
+
     def test_agents_are_on_the_roster(self) -> None:
         names = {a["name"] for a in app.load_roster()}
         self.assertTrue({agent for agent, _, _ in app._DEMO_SCRIPT} <= names)
@@ -391,7 +419,28 @@ class FakeConn:
         self.closed = True
 
 
+class LinxCommandTest(unittest.TestCase):
+    def test_only_plain_task_ids_get_a_command(self) -> None:
+        for tid in ("t-1", "o0.audit:2026-11-04", "A_b"):
+            self.assertEqual(app.linx_commands(tid)["approve_command"], f"linx approve {tid}")
+        for tid in ("", "-h", "--reason", "a b", "a;b", "a$(x)", "a`x`", "a\nb", "x" * 81, "\u00e9t\u00e9"):
+            self.assertEqual(app.linx_commands(tid), {"approve_command": None, "reject_command": None}, tid)
+
+
 class PostgresLedgerTest(unittest.TestCase):
+    def test_approvals_query_reads_only_pending_tasks_oldest_first(self) -> None:
+        row = ["t-1", "Deploy hello", "Lestinxor", "Sebastian", "demo", None,
+               "2026-11-04T09:00:00Z", "2026-11-04T09:00:00Z", None]
+        conn = FakeConn([row])
+        items = app.PostgresLedger(lambda: conn).approvals()
+        sql = conn.calls[0][0]
+        self.assertIn("FROM bastion.dashboard_tasks", sql)
+        self.assertIn("status = 'awaiting_approval'", sql)
+        self.assertIn("ORDER BY requested_ts ASC", sql)
+        self.assertEqual(items[0]["task_id"], "t-1")
+        self.assertEqual(items[0]["run_url"], "")
+        self.assertNotIn("output", items[0])
+
     def test_operations_task_query_excludes_output(self) -> None:
         conn = FakeConn(
             [

@@ -32,6 +32,35 @@ export type OperationsResponse = {
   control: { halted: boolean; reason: string | null; since: string | null };
 };
 
+/** A task waiting for the owner. The commands are null when the task id isn't safe to paste into a shell. */
+export type Approval = {
+  task_id: string;
+  title: string;
+  requested_by: string;
+  agent: string;
+  mode: string;
+  run_url: string;
+  requested_ts: string;
+  updated_ts: string;
+  detail: string;
+  approve_command: string | null;
+  reject_command: string | null;
+};
+export type ApprovalsResponse = { source: "demo" | "ledger"; approvals: Approval[] };
+
+const OVERDUE_MS = 24 * 60 * 60 * 1000;
+
+/** When the owner was first asked: the request time, else the last update. */
+export function waitingSince(item: Approval): string | null {
+  return item.requested_ts || item.updated_ts || null;
+}
+
+/** Waiting on the owner for more than a day. */
+export function isOverdue(item: Approval, now: Date = new Date()): boolean {
+  const since = waitingSince(item);
+  return since !== null && now.getTime() - new Date(since).getTime() > OVERDUE_MS;
+}
+
 export function isSafeGithubUrl(value: string | null): boolean {
   try {
     const url = new URL(value ?? "");

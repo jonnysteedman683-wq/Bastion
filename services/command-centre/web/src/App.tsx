@@ -1,19 +1,20 @@
-import { Activity, Bot, LayoutDashboard, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Activity, Bot, Check, ClipboardCopy, Inbox, LayoutDashboard, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useFeed, useNow, useOperations, useRoster } from "@/hooks";
-import { isSafeGithubUrl, timeAgo, type Agent, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
+import { useApprovals, useFeed, useNow, useOperations, useRoster } from "@/hooks";
+import { isOverdue, isSafeGithubUrl, timeAgo, waitingSince, type Agent, type Approval, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
-export type View = "operations" | "roster" | "ledger";
+export type View = "operations" | "approvals" | "roster" | "ledger";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
+  { id: "approvals", label: "Approvals", icon: Inbox },
   { id: "roster", label: "Roster", icon: Bot },
   { id: "ledger", label: "Ledger", icon: ScrollText },
 ];
@@ -25,6 +26,8 @@ export default function App() {
   const roster = useRoster();
   const now = useNow();
   const operations = useOperations();
+  const approvals = useApprovals();
+  const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
   return (
@@ -48,6 +51,11 @@ export default function App() {
             >
               <Icon className="size-4" aria-hidden />
               <span className="hidden sm:inline">{label}</span>
+              {id === "approvals" && pendingCount > 0 && (
+                <span className="ml-auto rounded-full bg-primary px-1.5 text-xs tabular-nums text-primary-foreground" aria-label={`${pendingCount} pending`}>
+                  {pendingCount}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -59,13 +67,14 @@ export default function App() {
           <SourceBadge source={source} />
           <button className="ml-auto text-sm text-muted-foreground underline" onClick={() => void signOut().then(() => window.location.assign("/login"))}>Sign out</button>
         </header>
-        {(feed.error || roster.error || operations.error) && (
+        {(feed.error || roster.error || operations.error || approvals.error) && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error}
+            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error ?? approvals.error}
           </div>
         )}
 
         {view === "operations" && <Operations data={operations.data} now={now} />}
+        {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
         {view === "roster" && <RosterCard agents={roster.data?.agents} now={now} />}
         {view === "ledger" && <FeedCard events={feed.events} now={now} />}
       </main>
@@ -109,6 +118,98 @@ function Operations({ data, now }: { data: OperationsResponse | null; now: Date 
       <FeedCard events={data.completions} now={now} limit={8} />
     </div>
   </div>;
+}
+
+function Approvals({ items, now }: { items?: Approval[]; now: Date }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Inbox className="size-4" aria-hidden /> Waiting for you
+        </CardTitle>
+        <CardDescription>
+          Oldest first. Decisions are signed by your owner key, which lives only on your PC: copy a command and run it
+          there. Bastion never holds the key.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!items ? (
+          <Skeleton className="h-40 w-full" />
+        ) : items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing is waiting for your approval.</p>
+        ) : (
+          <ul className="space-y-0">
+            {items.map((item, i) => {
+              const overdue = isOverdue(item, now);
+              return (
+                <li key={item.task_id}>
+                  {i > 0 && <Separator />}
+                  <div className="space-y-2 py-3">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="font-medium">{item.title || item.task_id}</span>
+                      <code className="font-mono text-xs text-muted-foreground">{item.task_id}</code>
+                      {overdue && (
+                        <Badge variant="outline" className="border-red-500/40 text-red-700 dark:text-red-300">
+                          waiting over a day
+                        </Badge>
+                      )}
+                      <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                        asked {timeAgo(waitingSince(item), now)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {[item.requested_by && `from ${item.requested_by}`, item.agent && `for ${item.agent}`, item.mode && `mode ${item.mode}`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      {item.detail && <> — {item.detail}</>}
+                      {isSafeGithubUrl(item.run_url) && (
+                        <> · <a className="underline" href={item.run_url}>run</a></>
+                      )}
+                    </p>
+                    {item.approve_command && item.reject_command ? (
+                      <div className="flex flex-wrap gap-2">
+                        <CopyCommand label="Approve" command={item.approve_command} />
+                        <CopyCommand label="Reject" command={item.reject_command} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-destructive">
+                        This task id has unusual characters, so no command is offered. Decide it from <code>linx pending</code>.
+                      </p>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CopyCommand({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      title={command}
+      className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-sm hover:bg-accent"
+    >
+      {copied ? <Check className="size-4" aria-hidden /> : <ClipboardCopy className="size-4" aria-hidden />}
+      <span>{copied ? "Copied" : label}</span>
+      <code className="hidden font-mono text-xs text-muted-foreground md:inline">{command}</code>
+    </button>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: number }) { return <Card className="gap-2 py-4"><CardHeader className="px-4"><CardDescription>{label}</CardDescription></CardHeader><CardContent className="px-4 text-2xl font-semibold tabular-nums">{value}</CardContent></Card>; }

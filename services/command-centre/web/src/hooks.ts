@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { cursorOf, getJSON, mergeEvents, type FeedResponse, type LedgerEvent, type OperationsResponse, type RosterResponse } from "@/lib/ledger";
+import { cursorOf, getJSON, mergeEvents, type ApprovalsResponse, type FeedResponse, type LedgerEvent, type OperationsResponse, type RosterResponse } from "@/lib/ledger";
 
 const FEED_POLL_MS = 5_000;
 const ROSTER_POLL_MS = 30_000;
@@ -71,6 +71,23 @@ export function useOperations() {
     let timer: number | undefined;
     const tick = async () => {
       try { setData(await getJSON<OperationsResponse>("/api/operations", ctrl.signal)); setError(null); }
+      catch (err) { if (!ctrl.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
+      if (!ctrl.signal.aborted) timer = window.setTimeout(tick, FEED_POLL_MS);
+    };
+    void tick();
+    return () => { ctrl.abort(); window.clearTimeout(timer); };
+  }, []);
+  return { data, error };
+}
+
+export function useApprovals() {
+  const [data, setData] = useState<ApprovalsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    let timer: number | undefined;
+    const tick = async () => {
+      try { setData(await getJSON<ApprovalsResponse>("/api/approvals", ctrl.signal)); setError(null); }
       catch (err) { if (!ctrl.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
       if (!ctrl.signal.aborted) timer = window.setTimeout(tick, FEED_POLL_MS);
     };

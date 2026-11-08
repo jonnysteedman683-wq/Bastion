@@ -26,6 +26,13 @@ decisions are signed by the owner key, which lives only on Jonny's PC, so each i
 command is offered only for plain ids (`[A-Za-z0-9][A-Za-z0-9._:-]{0,79}`); anything else must be decided from
 `linx pending`. One-click decisions are backlog item O2.
 
+## Kill switch
+
+The Operations view shows LinX's kill switch from `bastion.control` (the owner's last `linx/control/halt` write):
+running or halted, since when and why. A halt also puts a red banner on every view, within one 5-second poll.
+Like approvals, flipping it needs the owner key, so the card offers a copyable `linx halt --reason "<why>"` or
+`linx resume --reason "<why>"` to run on Jonny's PC.
+
 ## Agent ingest
 
 Private agents can report lifecycle events to `POST /api/ingest`. Configure a distinct secret for each allowed agent

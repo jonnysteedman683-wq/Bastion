@@ -150,7 +150,9 @@ class ServerTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.previous_ingest_keys = os.environ.get("INGEST_AGENT_KEYS")
+        self.previous_public_base = os.environ.get("BASTION_PUBLIC_URL")
         os.environ.pop("INGEST_AGENT_KEYS", None)
+        os.environ.pop("BASTION_PUBLIC_URL", None)
         app.INGEST_DB_PATH.unlink(missing_ok=True)
 
     def tearDown(self) -> None:
@@ -158,6 +160,10 @@ class ServerTest(unittest.TestCase):
             os.environ.pop("INGEST_AGENT_KEYS", None)
         else:
             os.environ["INGEST_AGENT_KEYS"] = self.previous_ingest_keys
+        if self.previous_public_base is None:
+            os.environ.pop("BASTION_PUBLIC_URL", None)
+        else:
+            os.environ["BASTION_PUBLIC_URL"] = self.previous_public_base
 
     def get(
         self, path: str, headers: dict[str, str] | None = None, authenticated: bool = True
@@ -241,6 +247,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 400)
         status, _, _ = self.post("/api/ingest", {"kind": "task.completed"}, headers)
         self.assertEqual(status, 400)
+        status, _, _ = self.post("/api/ingest", {"summary": "x" * 5000}, headers)
+        self.assertEqual(status, 400)
+
+    def test_ingest_rejects_too_large_request(self) -> None:
+        os.environ["INGEST_AGENT_KEYS"] = json.dumps({"researcher-01": "researcher-secret"})
+        status, _, _ = self.post_bytes(
+            "/api/ingest",
+            (json.dumps({"summary": "x" * 70_000}).encode("utf-8")),
+            {"Authorization": "Bearer researcher-secret"},
+        )
+        self.assertEqual(status, 413)
 
     def test_ingested_event_appears_in_feed(self) -> None:
         """Removing the local-ledger merger must hide accepted agent reports from the dashboard."""
@@ -302,6 +319,12 @@ class ServerTest(unittest.TestCase):
         self.assertIn("Secure", headers["Set-Cookie"])
         self.assertIn("SameSite=Lax", headers["Set-Cookie"])
         self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_magic_link_uses_configured_public_origin(self) -> None:
+        os.environ["BASTION_PUBLIC_URL"] = "https://dashboard.example.com"
+        status, _, _ = self.post("/auth/magic-link", {"email": "jonny@example.com"})
+        self.assertEqual(status, 202)
+        self.assertEqual(self.auth.sent[-1][1], "https://dashboard.example.com/auth/callback")
 
     def test_invalid_callback_never_sets_a_session_cookie(self) -> None:
         status, headers, _ = self.get("/auth/callback?token_hash=wrong&type=email", authenticated=False)
@@ -663,3 +686,4 @@ class LedgerConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

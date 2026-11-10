@@ -75,7 +75,7 @@ Exit: Jonny can see and decide everything waiting on him from the command centre
 Exit: any local AI can push events to Bastion, and the dashboard shows a unified mixed feed from all connected sources.
 
 - [x] H1 Ingest endpoint: `POST /api/ingest` with API-key auth, flexible JSON payload, stored in a local SQLite buffer, merged into the feed. *Done when* a curl POST from a local AI shows up in the dashboard within 5 seconds.
-- [ ] H2 Source registry: JSON config of named sources (type, endpoint, auth, poll interval) loaded at startup. *Done when* adding a source to config and restarting shows it in the roster.
+- [x] H2 Source registry: JSON config of named sources (type, endpoint, auth, poll interval) loaded at startup. *Done when* adding a source to config and restarting shows it in the roster.
 - [ ] H3 Adapters: Ollama (`/api/tags`, `/api/ps`) and OpenAI-compatible (`/v1/models`) auto-discovery. *Done when* an Ollama instance on the LAN appears in the roster with its models listed.
 - [ ] H4 Hermes reporter: pushes session/cron/memory events to `/api/ingest` (or directly to Supabase). *Done when* a Hermes session shows up in the Bastion feed.
 - [ ] H5 Multi-source aggregation: aggregate events/roster across N Supabase DSNs + local buffer. *Done when* events from two different Supabase projects appear in one feed.

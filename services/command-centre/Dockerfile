@@ -17,7 +17,7 @@ RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.txt && rm requirements.txt
-COPY app.py roster.json caps.json ./
+COPY app.py roster.json caps.json sources.json ./
 COPY --from=web /web/dist ./web/dist
 
 USER 10001

@@ -1,4 +1,4 @@
-"""Static and stubbed tests for the Forge VM bundle (deploy/forge-vm/).
+"""Static and stubbed tests for the Forge VM bundle (deploy/forge-vm/) and its runbook.
 
 Nothing here touches a network, a cloud or a real service: gcloud, tailscale, systemctl, git and uv are
 replaced by stubs first on PATH, and forge-setup.sh runs against a throwaway FORGE_ROOT.
@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BUNDLE = ROOT / "deploy" / "forge-vm"
+RUNBOOK = ROOT / "docs" / "FORGE_VM.md"
 
 BUNDLE_FILES = (
     "cloud-init.yaml",
@@ -133,7 +134,7 @@ class BundleStaticTests(unittest.TestCase):
         self.assertNotIn("must be bumped", text.lower())
 
     def test_no_credential_shaped_strings(self) -> None:
-        for path in [BUNDLE / name for name in BUNDLE_FILES]:
+        for path in [*(BUNDLE / name for name in BUNDLE_FILES), RUNBOOK]:
             text = path.read_text(encoding="utf-8")
             for label, pattern in CREDENTIAL_SHAPES.items():
                 self.assertIsNone(pattern.search(text), f"{path.name}: {label}")
@@ -677,6 +678,45 @@ class CreateVmTests(unittest.TestCase):
         self.assertIn("GCP_PROJECT=bastion-471203", block)
         self.assertIn("deploy/forge-vm/create-vm.sh", block)
         self.assertNotIn("gcloud auth", block)
+
+
+class RunbookTests(unittest.TestCase):
+    STEPS = ("Tailscale", "Supabase", "Google Cloud", "On the VM", "Agent keys", "Close public SSH")
+
+    def test_runbook_covers_every_owner_step(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        sections = re.split(r"(?m)^## ", text)[1:]
+        numbered = [s for s in sections if re.match(r"\d+\. ", s)]
+        numbers = [re.match(r"\d+", s).group() for s in numbered]
+        self.assertEqual(numbers, [str(i) for i in range(1, len(self.STEPS) + 1)])
+        for section, step in zip(numbered, self.STEPS):
+            heading = section.splitlines()[0]
+            self.assertIn(step, heading)
+            last = section.strip().split("\n\n")[-1]
+            self.assertRegex(last, r"(?i)you'll see", f"step '{heading}' must end with what the owner sees")
+        for needle in (
+            "deploy/forge-vm/cloudshell-oneliner.md",
+            "create-vm.sh",
+            "Cloud Shell",
+            "sudo /opt/forge/forge-setup.sh",
+            "sudo /opt/forge/forge-keys.sh",
+            "sudo /opt/forge/forge-check.sh",
+            "paste these two hashes to Claude",
+            "Supabase connector",
+            "python -m vortex migrate",
+            "vortex_app",
+            "memory.write",
+            "tailscale ssh",
+            "e2-micro",
+            "VORTEX_REF",
+        ):
+            self.assertIn(needle, text, needle)
+        self.assertNotRegex(text, r"(?i)claude runs (deploy/forge-vm/)?create-vm|claude runs gcloud")
+
+    def test_readme_lists_the_bundle(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("`deploy/forge-vm/`", readme)
+        self.assertIn("docs/FORGE_VM.md", readme)
 
 
 if __name__ == "__main__":

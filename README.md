@@ -31,6 +31,7 @@ Nothing in the cloud calls into an agent; agents write to the ledger, dashboards
 | `.github/workflows/summon.yml` + `tools/summon/` | Summon: Lestinxor posts a task, Sebastian claims and runs it, the result lands on the UniSync ledger ([how](docs/SUMMON.md)) |
 | `deploy/healthchecks.json` + `tools/deadman/` | Dead-man checks: every scheduled job in the fleet, synced to Healthchecks.io ([how](docs/DEADMAN.md)) |
 | `tools/steward/` | PR steward agent: triages every open PR in the fleet and reports it on the ledger ([how](docs/STEWARD.md)) |
+| `deploy/forge-vm/` | The Forge VM: Vortex on one Always Free e2-micro behind Tailscale Funnel, with per-agent API keys ([runbook](docs/FORGE_VM.md)) |
 | `docs/` | [Quartermaster runbook](docs/QUARTERMASTER.md) and [backlog](docs/BACKLOG.md) |
 
 ## Checks

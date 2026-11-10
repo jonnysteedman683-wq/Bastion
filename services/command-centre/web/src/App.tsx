@@ -1,20 +1,25 @@
-import { Activity, Bot, Check, ClipboardCopy, Inbox, LayoutDashboard, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { FormEvent, Suspense, lazy, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useFeed, useNow, useOperations, useRoster } from "@/hooks";
-import { isOverdue, isSafeGithubUrl, timeAgo, waitingSince, type Agent, type Approval, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
+import { useApprovals, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+
+import { isOverdue, isSafeGithubUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
-export type View = "operations" | "approvals" | "roster" | "ledger";
+// Recharts is heavy: load the Spend view, and the chart library with it, only when it is opened.
+const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
+
+export type View = "operations" | "approvals" | "spend" | "roster" | "ledger";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
   { id: "approvals", label: "Approvals", icon: Inbox },
+  { id: "spend", label: "Spend", icon: Coins },
   { id: "roster", label: "Roster", icon: Bot },
   { id: "ledger", label: "Ledger", icon: ScrollText },
 ];
@@ -27,6 +32,7 @@ export default function App() {
   const now = useNow();
   const operations = useOperations();
   const approvals = useApprovals();
+  const spend = useSpend();
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
@@ -67,14 +73,21 @@ export default function App() {
           <SourceBadge source={source} />
           <button className="ml-auto text-sm text-muted-foreground underline" onClick={() => void signOut().then(() => window.location.assign("/login"))}>Sign out</button>
         </header>
-        {(feed.error || roster.error || operations.error || approvals.error) && (
+        {(feed.error || roster.error || operations.error || approvals.error || spend.error) && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error ?? approvals.error}
+            <TriangleAlert className="size-4" aria-hidden /> Can't reach the command centre API: {feed.error ?? roster.error ?? operations.error ?? approvals.error ?? spend.error}
           </div>
         )}
 
+        {operations.data?.control.halted && <HaltBanner control={operations.data.control} now={now} />}
+
         {view === "operations" && <Operations data={operations.data} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
+        {view === "spend" && (
+          <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+            <SpendView data={spend.data} />
+          </Suspense>
+        )}
         {view === "roster" && <RosterCard agents={roster.data?.agents} now={now} />}
         {view === "ledger" && <FeedCard events={feed.events} now={now} />}
       </main>
@@ -105,6 +118,7 @@ function Operations({ data, now }: { data: OperationsResponse | null; now: Date 
   const counts = data.tasks.reduce<Record<string, number>>((all, task) => ({ ...all, [task.status]: (all[task.status] ?? 0) + 1 }), {});
   const staleReport = data.pr_report && now.getTime() - new Date(data.pr_report.scanned_ts).getTime() > 26 * 60 * 60 * 1000;
   return <div className="space-y-6">
+    <KillSwitch control={data.control} now={now} />
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
       <Metric label="Needs attention" value={data.attention.length} />
       <Metric label="Completed" value={counts.done ?? 0} />
@@ -182,6 +196,42 @@ function Approvals({ items, now }: { items?: Approval[]; now: Date }) {
             })}
           </ul>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HaltBanner({ control, now }: { control: Control; now: Date }) {
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-red-500/50 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-200">
+      <OctagonPause className="size-5 shrink-0" aria-hidden />
+      <span className="font-semibold">Fleet halted</span>
+      {control.since && <span>since {timeAgo(control.since, now)}</span>}
+      <span className="min-w-0 basis-full sm:basis-auto">{control.reason || "No reason given."}</span>
+    </div>
+  );
+}
+
+function KillSwitch({ control, now }: { control: Control; now: Date }) {
+  const next = killSwitchCommand(control);
+  return (
+    <Card className={cn(control.halted && "border-red-500/50")}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Power className="size-4" aria-hidden /> Kill switch
+          <Badge variant="outline" className={cn("ml-1", control.halted ? "border-red-500/40 text-red-700 dark:text-red-300" : "border-emerald-500/40 text-emerald-700 dark:text-emerald-300")}>
+            {control.halted ? "halted" : "running"}
+          </Badge>
+        </CardTitle>
+        <CardDescription>
+          {control.halted
+            ? `Nightly work and the memory loop are stopped${control.since ? ` (${timeAgo(control.since, now)})` : ""}.`
+            : "Halting stops nightly work and pauses the memory loop."}{" "}
+          Only your owner key can flip it: copy the command and run it on your PC.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <CopyCommand label={next.action} command={next.command} />
       </CardContent>
     </Card>
   );

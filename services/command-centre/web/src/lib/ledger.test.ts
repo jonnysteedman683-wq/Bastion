@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cursorOf, isOverdue, isSafeGithubUrl, mergeEvents, timeAgo, waitingSince, type Approval, type LedgerEvent } from "./ledger";
+import { cursorOf, isOverdue, killSwitchCommand, isSafeGithubUrl, mergeEvents, timeAgo, waitingSince, type Approval, type LedgerEvent } from "./ledger";
 
 const ev = (id: number): LedgerEvent => ({ id, ts: "2026-11-04T00:00:00Z", agent: "a", kind: "k", summary: "s" });
 
@@ -54,5 +54,16 @@ describe("approvals", () => {
     expect(isOverdue(approval("2026-11-03T12:00:01Z"), now)).toBe(false);
     expect(isOverdue(approval("2026-11-03T11:59:59Z"), now)).toBe(true);
     expect(isOverdue(approval("", ""), now)).toBe(false);
+  });
+});
+
+describe("killSwitchCommand", () => {
+  it("offers halt while running and resume while halted", () => {
+    expect(killSwitchCommand({ halted: false, reason: null, since: null })).toEqual({
+      action: "Halt the fleet", command: 'linx halt --reason "<why>"',
+    });
+    expect(killSwitchCommand({ halted: true, reason: "runaway spend", since: "2026-11-04T11:00:00Z" })).toEqual({
+      action: "Resume the fleet", command: 'linx resume --reason "<why>"',
+    });
   });
 });

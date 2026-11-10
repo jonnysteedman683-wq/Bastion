@@ -4,6 +4,8 @@
     GET /api/roster    -> {"source": ..., "agents": [{name, role, runs_on, last_seen, status}]}
     GET /api/feed      -> {"source": ..., "events": [{id, ts, agent, kind, summary}]}, newest first
                           ?after=<id> returns only newer events; ?limit=<n> caps the count (max 200)
+    GET /api/spend     -> {"source": ..., "today"/"last_7d"/"last_30d": {cost_usd, tokens, runs, ...},
+                          "daily": [30 UTC days, oldest first], "agents": [...], "caps": ...}
     GET /api/approvals -> {"source": ..., "approvals": [{task_id, title, ..., approve_command, reject_command}]},
                           oldest first. Read-only: the owner signs decisions with LinX on their own machine.
     GET /*             -> the web app (web/dist), with index.html for client-side routes
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -33,7 +36,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,6 +46,10 @@ SERVICE = "command-centre"
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "web" / "dist"
 ROSTER_PATH = HERE / "roster.json"
+CAPS_PATH = HERE / "caps.json"
+SPEND_DAYS = 30
+SPEND_FIELDS = ("day", "agent", "runs", "input_tokens", "output_tokens", "cost_usd")
+CAP_NEAR = 0.8  # share of a cap at which spend shows as "near"
 MAX_LIMIT = 200
 ACTIVE_WITHIN = timedelta(hours=1)
 IDLE_WITHIN = timedelta(days=1)
@@ -93,6 +100,8 @@ class Ledger(Protocol):
     def operations(self) -> dict[str, object]: ...
 
     def approvals(self) -> list[dict[str, str]]: ...
+
+    def spend(self, since: str) -> list[dict[str, object]]: ...
 
 
 class AuthError(Exception):
@@ -228,7 +237,6 @@ class DemoLedger:
             "control": {"halted": False, "reason": None, "since": None},
         }
 
-
     def approvals(self) -> list[dict[str, str]]:
         asked = (self._clock() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return [
@@ -244,6 +252,28 @@ class DemoLedger:
                 "detail": "Owner approval required",
             }
         ]
+
+    def spend(self, since: str) -> list[dict[str, object]]:
+        """A month of plausible spend, fixed per day so reloads agree."""
+        today = self._clock().date()
+        rows: list[dict[str, object]] = []
+        for back in range(SPEND_DAYS):
+            day = today - timedelta(days=back)
+            n = day.toordinal()
+            for agent, base, spread in (("Sebastian", 0.6, 7), ("Claude", 0.9, 11), ("Jules", 0.3, 5)):
+                runs = 1 + n % spread % 4
+                cost = round(base * runs * (0.6 + (n * 7 + len(agent)) % 10 / 10), 4)
+                rows.append(
+                    {
+                        "day": day.isoformat(),
+                        "agent": agent,
+                        "runs": runs,
+                        "input_tokens": int(cost * 180_000),
+                        "output_tokens": int(cost * 22_000),
+                        "cost_usd": cost,
+                    }
+                )
+        return [row for row in rows if str(row["day"]) >= since]
 
 
 # --- UniSync ledger (Supabase Postgres) -----------------------------------------------------
@@ -285,9 +315,13 @@ DASHBOARD_TASKS_SQL = (
 )
 STEWARD_REPORT_SQL = "SELECT scanned_ts, summary, counts, floods, items, truncated FROM bastion.steward_report LIMIT 1"
 CONTROL_SQL = "SELECT halted, reason, since FROM bastion.control LIMIT 1"
+SPEND_SQL = (
+    "SELECT day, agent, runs, input_tokens, output_tokens, cost_usd "
+    "FROM bastion.spend_daily WHERE day >= :since ORDER BY day, agent"
+)
 APPROVALS_SQL = (
-    f"SELECT {', '.join(APPROVAL_FIELDS)} FROM bastion.dashboard_tasks "
-    "WHERE status = 'awaiting_approval' ORDER BY requested_ts ASC NULLS LAST LIMIT :limit"
+    "SELECT task_id, title, requested_by, agent, mode, run_url, requested_ts, updated_ts, detail "
+    "FROM bastion.dashboard_tasks WHERE status = 'awaiting_approval' ORDER BY requested_ts ASC NULLS LAST LIMIT :limit"
 )
 
 
@@ -335,6 +369,12 @@ class PostgresLedger:
         return [
             dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True))
             for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)
+        ]
+
+    def spend(self, since: str) -> list[dict[str, object]]:
+        return [
+            {**dict(zip(SPEND_FIELDS, row, strict=True)), "cost_usd": float(row[5] or 0)}
+            for row in self._run(SPEND_SQL, since=since)
         ]
 
     def approvals(self, limit: int = MAX_LIMIT) -> list[dict[str, str]]:
@@ -511,6 +551,133 @@ class MergedLedger:
     def approvals(self) -> list[dict[str, str]]:
         return self._base.approvals()
 
+    def spend(self, since: str) -> list[dict[str, object]]:
+        return self._base.spend(since)
+
+
+# --- Spend ---------------------------------------------------------------------------------
+
+
+def load_caps(path: Path = CAPS_PATH) -> dict[str, Any]:
+    """Daily USD caps: fleet-wide, per-agent default, and per-agent overrides. Missing means no cap."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        data = {}
+
+    def cap(value: object) -> float | None:
+        number = _number(value)
+        return number if number > 0 else None
+
+    overrides = data.get("agent_daily_usd") or {}
+    return {
+        "daily_usd": cap(data.get("daily_usd")),
+        "default_agent_daily_usd": cap(data.get("default_agent_daily_usd")),
+        "agent_daily_usd": {str(k): v for k, v in ((k, cap(v)) for k, v in overrides.items()) if v is not None},
+    }
+
+
+def _number(value: object) -> float:
+    """A finite, positive number, else 0. Ledger rows are agent-written, so never trust their types."""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)  # type: ignore[arg-type]  # int, float, str or Decimal (pg8000)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) and number > 0 else 0.0
+
+
+def _cap_status(spent: float, cap: float | None) -> str:
+    if cap is None:
+        return "none"
+    return "over" if spent >= cap else "near" if spent >= cap * CAP_NEAR else "ok"
+
+
+def summarise_spend(rows: list[dict[str, object]], caps: Mapping[str, Any], today: date) -> dict[str, object]:
+    """Totals for today, 7 and 30 UTC days, a zero-filled daily series and per-agent spend against caps."""
+    days = [(today - timedelta(days=back)).isoformat() for back in range(SPEND_DAYS - 1, -1, -1)]
+    week = set(days[-7:])
+    keys = ("runs", "input_tokens", "output_tokens", "cost_usd")
+    daily = {day: dict.fromkeys(keys, 0.0) for day in days}
+    agents: dict[str, dict[str, float]] = {}
+    for row in rows:
+        day = str(row.get("day", ""))
+        if day not in daily:
+            continue
+        values = {key: _number(row.get(key)) for key in keys}
+        for key in keys:
+            daily[day][key] += values[key]
+        a = agents.setdefault(
+            str(row.get("agent", "")), {"today": 0.0, "week": 0.0, "month": 0.0, "tokens": 0.0, "runs": 0.0}
+        )
+        a["month"] += values["cost_usd"]
+        if day in week:
+            a["week"] += values["cost_usd"]
+            a["tokens"] += values["input_tokens"] + values["output_tokens"]
+            a["runs"] += values["runs"]
+        if day == days[-1]:
+            a["today"] += values["cost_usd"]
+
+    def window(selected: list[str]) -> dict[str, object]:
+        return {
+            "cost_usd": round(sum(daily[d]["cost_usd"] for d in selected), 4),
+            "input_tokens": int(sum(daily[d]["input_tokens"] for d in selected)),
+            "output_tokens": int(sum(daily[d]["output_tokens"] for d in selected)),
+            "runs": int(sum(daily[d]["runs"] for d in selected)),
+        }
+
+    fleet_cap = caps.get("daily_usd")
+    today_total = {
+        **window(days[-1:]),
+        "cap_usd": fleet_cap,
+        "cap_status": _cap_status(daily[days[-1]]["cost_usd"], fleet_cap),
+    }
+    agent_rows = []
+    for name, a in sorted(agents.items(), key=lambda item: (-item[1]["month"], item[0])):
+        cap = (caps.get("agent_daily_usd") or {}).get(name, caps.get("default_agent_daily_usd"))
+        agent_rows.append(
+            {
+                "agent": name,
+                "today_usd": round(a["today"], 4),
+                "last_7d_usd": round(a["week"], 4),
+                "last_30d_usd": round(a["month"], 4),
+                "last_7d_tokens": int(a["tokens"]),
+                "last_7d_runs": int(a["runs"]),
+                "cap_usd": cap,
+                "cap_status": _cap_status(a["today"], cap),
+            }
+        )
+    return {
+        "currency": "USD",
+        "reporting": bool(agents),
+        "caps": dict(caps),
+        "today": today_total,
+        "last_7d": window(days[-7:]),
+        "last_30d": window(days),
+        "daily": [
+            {
+                "day": d,
+                "cost_usd": round(v["cost_usd"], 4),
+                "input_tokens": int(v["input_tokens"]),
+                "output_tokens": int(v["output_tokens"]),
+                "runs": int(v["runs"]),
+            }
+            for d, v in daily.items()
+        ],
+        "agents": agent_rows,
+    }
+
+
+def spend_report(ledger: Ledger, now: datetime) -> dict[str, object]:
+    today = now.astimezone(UTC).date()
+    since = (today - timedelta(days=SPEND_DAYS - 1)).isoformat()
+    return {
+        "source": ledger.source,
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        **summarise_spend(ledger.spend(since), load_caps(), today),
+    }
+
 
 def linx_commands(task_id: str) -> dict[str, str | None]:
     """The LinX commands that decide a task, or None for ids that aren't safe to paste into a shell."""
@@ -596,6 +763,10 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                 if self._current_user() is None:
                     return
                 self._ledger_call(lambda: {"source": ledger.source, **ledger.operations()})
+            elif path == "/api/spend":
+                if self._current_user() is None:
+                    return
+                self._ledger_call(lambda: spend_report(ledger, datetime.now(UTC)))
             elif path == "/api/approvals":
                 if self._current_user() is None:
                     return

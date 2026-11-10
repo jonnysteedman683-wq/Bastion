@@ -1,0 +1,34 @@
+-- Spend per agent per UTC day for the command centre (Supabase project UNISYNCARC). Safe to re-run.
+-- Applied after bastion_reader.sql. Read-only, in the private `bastion` schema; nothing for anon/authenticated.
+--
+-- Usage contract (backlog G1): any ledger event may carry a `usage` object in its body, normally on
+-- task.result or task.failed:
+--   "usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.0123}
+-- Every field is optional. Agents write these bodies, so the view trusts nothing: a field counts only
+-- when it is a JSON number, negatives count as 0 and values are clamped, so one bad event can never
+-- break the view or inflate a total past the clamp.
+
+create or replace view bastion.spend_daily as
+with usage as (
+  select
+    to_char(coalesce(to_timestamp(e.ts), e.inserted) at time zone 'UTC', 'YYYY-MM-DD') as day,
+    e.sender as agent,
+    e.body->'usage' as u
+  from public.unisync_events e
+  where jsonb_typeof(e.body->'usage') = 'object'
+)
+select
+  day,
+  agent,
+  count(*)::int as runs,
+  sum(case when jsonb_typeof(u->'input_tokens') = 'number'
+      then least(greatest((u->>'input_tokens')::numeric, 0), 1e9) else 0 end)::bigint as input_tokens,
+  sum(case when jsonb_typeof(u->'output_tokens') = 'number'
+      then least(greatest((u->>'output_tokens')::numeric, 0), 1e9) else 0 end)::bigint as output_tokens,
+  round(sum(case when jsonb_typeof(u->'cost_usd') = 'number'
+      then least(greatest((u->>'cost_usd')::numeric, 0), 1e4) else 0 end), 6) as cost_usd
+from usage
+group by day, agent;
+
+revoke all on bastion.spend_daily from public, anon, authenticated;
+grant select on bastion.spend_daily to bastion_reader;

@@ -29,8 +29,18 @@ export type OperationsResponse = {
   tasks: OperationTask[];
   pr_report: { scanned_ts: string; summary: string; items: { pr: string; url: string; bucket: string; flags: string[]; note: string }[] } | null;
   completions: LedgerEvent[];
-  control: { halted: boolean; reason: string | null; since: string | null };
+  control: Control;
 };
+
+/** LinX's kill switch, as read from the owner's last linx/control/halt memory write. */
+export type Control = { halted: boolean; reason: string | null; since: string | null };
+
+/** The one LinX command that flips the kill switch from its current state. Run on the owner's PC. */
+export function killSwitchCommand(control: Control): { action: string; command: string } {
+  return control.halted
+    ? { action: "Resume the fleet", command: 'linx resume --reason "<why>"' }
+    : { action: "Halt the fleet", command: 'linx halt --reason "<why>"' };
+}
 
 /** A task waiting for the owner. The commands are null when the task id isn't safe to paste into a shell. */
 export type Approval = {

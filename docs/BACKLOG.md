@@ -22,7 +22,11 @@ Exit: summon to live result on the dashboard with no API key, at $0.
 ## M2 · Safety
 Exit: a deliberate cap breach pauses the agent and alerts Jonny.
 
-- [ ] G1 Cost loop: per-run spend to the ledger, Langfuse traces, per-agent and daily caps
+- G1 Cost loop: per-run spend to the ledger, Langfuse traces, per-agent and daily caps (split into G1a-G1d)
+  - [x] G1a Usage contract (`usage` on any ledger event; `ledger/bastion_spend.sql`) and the command centre's Spend view: today, 7 and 30 days, a 30-day chart, per-agent spend against display-only caps in `caps.json`. *Done when* a `task.result` carrying `usage` shows in today's total within a minute.
+  - [ ] G1b Agents report usage: `tools/summon finish --usage <file>` attaches it to `task.result`/`task.failed`; Sebastian writes that file from its tracer (🔒 in Sebastian: `src/sebastian/agent.py` is guarded). *Done when* a summoned Sebastian run's tokens appear in the Spend view.
+  - [ ] G1c Langfuse traces per run, linked from the run's ledger event.
+  - [ ] G1d Enforce caps: an agent over its daily cap is halted and Jonny is alerted (ntfy via `linx notify`). *Done when* a deliberate breach pauses the agent and alerts.
 - [ ] G2 Trust ladder R0-R4 with automatic demotion
 - G3 Healthchecks.io dead-man checks for every scheduled job (split into G3a-G3c; see [DEADMAN.md](DEADMAN.md))
   - [x] G3a Check registry `deploy/healthchecks.json` and `python -m tools.deadman validate|plan|sync`
@@ -57,7 +61,7 @@ Exit: Jonny can see and decide everything waiting on him from the command centre
 
 - [x] O1 Approvals view: `GET /api/approvals` lists every task awaiting approval, oldest first, with a copyable `linx approve`/`linx reject` command (none for task ids unsafe to paste into a shell); flags anything waiting over a day. *Done when* a pending task on the ledger shows in the view with a working copy button.
 - [ ] O2 🔒 One-click decisions: the dashboard posts an unsigned `approval.intent` (new write-only role) and a LinX relay on the owner's PC signs it with the owner key. Needs S2 (Cloudflare Access) first. *Done when* clicking Approve lands a signed `approval.decision` on the ledger and the task leaves the view.
-- [ ] O3 Kill switch panel: show `bastion.control` (halted, reason, since) as a banner and a copyable `linx halt`/`linx resume`. *Done when* a halt on the ledger shows the banner within 5 seconds.
+- [x] O3 Kill switch panel: show `bastion.control` (halted, reason, since) as a banner and a copyable `linx halt`/`linx resume`. *Done when* a halt on the ledger shows the banner within 5 seconds.
 
 ## M6 · AI Hub
 Exit: any local AI can push events to Bastion, and the dashboard shows a unified mixed feed from all connected sources.

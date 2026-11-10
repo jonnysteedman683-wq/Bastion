@@ -2,12 +2,14 @@
 
 Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog item S1.
 
-- `app.py`: standard-library server. Serves `web/dist`, plus `/health`, `/api/feed`, `/api/roster`, `/api/operations`
-  and `/api/approvals`.
+- `app.py`: standard-library server. Serves `web/dist`, plus `/health`, `/api/feed`, `/api/roster`, `/api/operations`,
+  `/api/approvals` and `/api/spend`.
+- `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Display only until G1d.
 - `web/`: React + Tailwind + shadcn/ui. The browser only talks to `app.py`, never to Supabase.
 - `roster.json`: the agents shown on the roster.
 - `ledger/bastion_reader.sql`: read-only `bastion.feed` and `bastion.roster` views over the existing UniSync tables
   (Supabase project UNISYNCARC), and the `bastion_reader` role that can read only those.
+- `ledger/bastion_spend.sql`: `bastion.spend_daily`, token and dollar usage per agent per UTC day.
 - `ledger/bastion_tasks_control.sql`: `bastion.tasks` (each task's status, by Lestinxor's rules) and `bastion.control`
   (LinX's kill switch), both read-only.
 
@@ -25,6 +27,26 @@ decisions are signed by the owner key, which lives only on Jonny's PC, so each i
 `linx approve <task>` / `linx reject <task> --reason "<why>"` to run there. Task ids are written by agents, so a
 command is offered only for plain ids (`[A-Za-z0-9][A-Za-z0-9._:-]{0,79}`); anything else must be decided from
 `linx pending`. One-click decisions are backlog item O2.
+
+## Spend
+
+Agents report usage by adding a `usage` object to any ledger event, normally `task.result` or `task.failed`:
+
+```json
+"usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.0123}
+```
+
+Every field is optional. `bastion.spend_daily` (`ledger/bastion_spend.sql`, apply after `bastion_reader.sql`) sums them
+per agent per UTC day. Agents write these bodies, so the view counts a field only when it is a JSON number, treats
+negatives as 0 and clamps outliers. The Spend view shows today, 7 and 30 days, a 30-day chart and each agent's spend
+today against `caps.json`. Until agents report usage (backlog G1b) the view says so instead of showing zeros as fact.
+
+## Kill switch
+
+The Operations view shows LinX's kill switch from `bastion.control` (the owner's last `linx/control/halt` write):
+running or halted, since when and why. A halt also puts a red banner on every view, within one 5-second poll.
+Like approvals, flipping it needs the owner key, so the card offers a copyable `linx halt --reason "<why>"` or
+`linx resume --reason "<why>"` to run on Jonny's PC.
 
 ## Agent ingest
 

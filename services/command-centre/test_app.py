@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import app
 
@@ -52,14 +53,42 @@ class FixedLedger:
             "control": {"halted": False, "reason": None, "since": None},
         }
 
+    def spend(self, since: str) -> list[dict[str, object]]:
+        return [row for row in SPEND_ROWS if str(row["day"]) >= since]
+
     def approvals(self) -> list[dict[str, str]]:
         base = {"requested_by": "Lestinxor", "agent": "Sebastian", "mode": "demo", "run_url": "", "detail": ""}
         return [
-            {**base, "task_id": "t-1", "title": "Deploy hello", "requested_ts": "2026-11-04T09:00:00Z",
-             "updated_ts": "2026-11-04T09:00:00Z"},
-            {**base, "task_id": "x; rm -rf ~", "title": "Hostile id", "requested_ts": "2026-11-04T10:00:00Z",
-             "updated_ts": "2026-11-04T10:00:00Z"},
+            {
+                **base,
+                "task_id": "t-1",
+                "title": "Deploy hello",
+                "requested_ts": "2026-11-04T09:00:00Z",
+                "updated_ts": "2026-11-04T09:00:00Z",
+            },
+            {
+                **base,
+                "task_id": "x; rm -rf ~",
+                "title": "Hostile id",
+                "requested_ts": "2026-11-04T10:00:00Z",
+                "updated_ts": "2026-11-04T10:00:00Z",
+            },
         ]
+
+
+SPEND_ROWS = [
+    {
+        "day": "2026-11-04",
+        "agent": "Sebastian",
+        "runs": 3,
+        "input_tokens": 9000,
+        "output_tokens": 1000,
+        "cost_usd": 1.5,
+    },
+    {"day": "2026-11-04", "agent": "Claude", "runs": 1, "input_tokens": 500, "output_tokens": 500, "cost_usd": 0.25},
+    {"day": "2026-11-01", "agent": "Sebastian", "runs": 2, "input_tokens": 100, "output_tokens": 100, "cost_usd": 0.5},
+    {"day": "2026-10-20", "agent": "Claude", "runs": 1, "input_tokens": 10, "output_tokens": 10, "cost_usd": 4.0},
+]
 
 
 class FakeAuth:
@@ -327,6 +356,31 @@ class ServerTest(unittest.TestCase):
     def test_approvals_requires_a_session(self) -> None:
         self.assertEqual(self.get("/api/approvals", authenticated=False)[0], 401)
 
+    def test_spend_summarises_the_ledger(self) -> None:
+        status, _, body = self.get("/api/spend")
+        data = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["source"], "ledger")
+        self.assertEqual(len(data["daily"]), app.SPEND_DAYS)
+        self.assertEqual(
+            set(data),
+            {
+                "source",
+                "generated_at",
+                "currency",
+                "reporting",
+                "caps",
+                "today",
+                "last_7d",
+                "last_30d",
+                "daily",
+                "agents",
+            },
+        )
+
+    def test_spend_requires_a_session(self) -> None:
+        self.assertEqual(self.get("/api/spend", authenticated=False)[0], 401)
+
     def test_ledger_failure_is_502_not_a_crash(self) -> None:
         self.ledger.fail = True
         try:
@@ -396,6 +450,11 @@ class DemoLedgerTest(unittest.TestCase):
         clock[0] = NOW + app.DEMO_STEP * 2
         self.assertEqual([e.id for e in demo.events(first[0].id, 50)], [first[0].id + 2, first[0].id + 1])
 
+    def test_demo_spend_covers_the_window(self) -> None:
+        rows = app.DemoLedger(lambda: NOW).spend("2026-10-06")
+        self.assertTrue(rows)
+        self.assertTrue(all(str(r["day"]) >= "2026-10-06" and str(r["day"]) <= "2026-11-04" for r in rows))
+
     def test_demo_has_a_pending_approval(self) -> None:
         items = app.DemoLedger(lambda: NOW).approvals()
         self.assertEqual([i["task_id"] for i in items], ["demo-approval"])
@@ -419,6 +478,74 @@ class FakeConn:
         self.closed = True
 
 
+class SpendSummaryTest(unittest.TestCase):
+    caps: ClassVar[dict[str, object]] = {
+        "daily_usd": 2.0,
+        "default_agent_daily_usd": 1.0,
+        "agent_daily_usd": {"Claude": 5.0},
+    }
+    today = datetime(2026, 11, 4, tzinfo=UTC).date()
+
+    def summary(self, rows: list[dict[str, object]] | None = None) -> dict[str, object]:
+        return app.summarise_spend(SPEND_ROWS if rows is None else rows, self.caps, self.today)
+
+    def test_windows_are_today_7_and_30_days(self) -> None:
+        s = self.summary()
+        self.assertEqual(s["today"]["cost_usd"], 1.75)
+        self.assertEqual(s["today"]["runs"], 4)
+        self.assertEqual(s["today"]["input_tokens"], 9500)
+        self.assertEqual(s["last_7d"]["cost_usd"], 2.25)
+        self.assertEqual(s["last_30d"]["cost_usd"], 6.25)
+
+    def test_daily_series_is_zero_filled_oldest_first(self) -> None:
+        daily = self.summary()["daily"]
+        self.assertEqual(len(daily), app.SPEND_DAYS)
+        self.assertEqual(daily[0]["day"], "2026-10-06")
+        self.assertEqual(daily[-1]["day"], "2026-11-04")
+        self.assertEqual(daily[-1]["cost_usd"], 1.75)
+        self.assertEqual(daily[-2]["cost_usd"], 0)
+
+    def test_caps_status(self) -> None:
+        s = self.summary()
+        self.assertEqual((s["today"]["cap_usd"], s["today"]["cap_status"]), (2.0, "near"))
+        agents = {a["agent"]: a for a in s["agents"]}
+        self.assertEqual((agents["Sebastian"]["cap_usd"], agents["Sebastian"]["cap_status"]), (1.0, "over"))
+        self.assertEqual((agents["Claude"]["cap_usd"], agents["Claude"]["cap_status"]), (5.0, "ok"))
+        self.assertEqual([a["agent"] for a in s["agents"]], ["Claude", "Sebastian"])  # by 30-day spend
+        no_caps = app.summarise_spend(SPEND_ROWS, {}, self.today)
+        self.assertEqual((no_caps["today"]["cap_usd"], no_caps["today"]["cap_status"]), (None, "none"))
+
+    def test_rows_outside_the_window_and_bad_values_are_ignored(self) -> None:
+        rows = [
+            {"day": "2026-09-01", "agent": "Old", "runs": 1, "input_tokens": 1, "output_tokens": 1, "cost_usd": 9},
+            {
+                "day": "2026-11-04",
+                "agent": "Odd",
+                "runs": None,
+                "input_tokens": "x",
+                "output_tokens": -5,
+                "cost_usd": "nan",
+            },
+        ]
+        s = self.summary(rows)
+        self.assertEqual(s["last_30d"]["cost_usd"], 0)
+        self.assertEqual(s["today"]["output_tokens"], 0)
+        self.assertEqual([a["agent"] for a in s["agents"]], ["Odd"])
+
+    def test_reporting_flag(self) -> None:
+        self.assertTrue(self.summary()["reporting"])
+        self.assertFalse(self.summary([])["reporting"])
+
+    def test_missing_caps_file_means_no_caps(self) -> None:
+        caps = app.load_caps(Path("/nonexistent/caps.json"))
+        self.assertEqual(caps, {"daily_usd": None, "default_agent_daily_usd": None, "agent_daily_usd": {}})
+
+    def test_caps_file_is_valid(self) -> None:
+        caps = app.load_caps()
+        self.assertGreater(caps["daily_usd"], 0)
+        self.assertGreater(caps["default_agent_daily_usd"], 0)
+
+
 class LinxCommandTest(unittest.TestCase):
     def test_only_plain_task_ids_get_a_command(self) -> None:
         for tid in ("t-1", "o0.audit:2026-11-04", "A_b"):
@@ -429,8 +556,17 @@ class LinxCommandTest(unittest.TestCase):
 
 class PostgresLedgerTest(unittest.TestCase):
     def test_approvals_query_reads_only_pending_tasks_oldest_first(self) -> None:
-        row = ["t-1", "Deploy hello", "Lestinxor", "Sebastian", "demo", None,
-               "2026-11-04T09:00:00Z", "2026-11-04T09:00:00Z", None]
+        row = [
+            "t-1",
+            "Deploy hello",
+            "Lestinxor",
+            "Sebastian",
+            "demo",
+            None,
+            "2026-11-04T09:00:00Z",
+            "2026-11-04T09:00:00Z",
+            None,
+        ]
         conn = FakeConn([row])
         items = app.PostgresLedger(lambda: conn).approvals()
         sql = conn.calls[0][0]
@@ -440,6 +576,7 @@ class PostgresLedgerTest(unittest.TestCase):
         self.assertEqual(items[0]["task_id"], "t-1")
         self.assertEqual(items[0]["run_url"], "")
         self.assertNotIn("output", items[0])
+        self.assertIn(f"SELECT {', '.join(app.APPROVAL_FIELDS)} FROM", sql)
 
     def test_operations_task_query_excludes_output(self) -> None:
         conn = FakeConn(
@@ -497,6 +634,18 @@ class PostgresLedgerTest(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             app.PostgresLedger(lambda: conn).events(0, 1)
         self.assertTrue(conn.closed)
+
+
+class PostgresSpendTest(unittest.TestCase):
+    def test_spend_query_and_mapping(self) -> None:
+        from decimal import Decimal
+
+        conn = FakeConn([["2026-11-04", "Sebastian", 3, 9000, 1000, Decimal("1.500000")]])
+        rows = app.PostgresLedger(lambda: conn).spend("2026-10-06")
+        self.assertIn("FROM bastion.spend_daily WHERE day >= :since", conn.calls[0][0])
+        self.assertEqual(conn.calls[0][1], {"since": "2026-10-06"})
+        self.assertEqual(rows[0]["cost_usd"], 1.5)
+        self.assertEqual(rows[0]["agent"], "Sebastian")
 
 
 class LedgerConfigTest(unittest.TestCase):

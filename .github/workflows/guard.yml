@@ -1,0 +1,48 @@
+name: Guard
+
+# Fails a PR that touches guarded paths unless the owner adds the `owner-approved` label.
+# Guarded (AGENTS.md "Never", .github/CODEOWNERS): CI and workflows, the deploy policy, infrastructure,
+# Quartermaster (the only deployer) and the agents' own rules. tests/test_guard.py keeps this list,
+# CODEOWNERS and AGENTS.md in sync.
+# Read-only, no secrets and no checkout of PR code is executed, so it is safe on any PR.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check guarded paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          guarded='^(\.github/|deploy/policy\.json$|infra/|tools/quartermaster/|AGENTS\.md$|CLAUDE\.md$)'
+          hits=$(git diff --name-only "$BASE"..."$HEAD" | grep -E "$guarded" || true)
+          if [ -z "$hits" ]; then
+            echo "No guarded paths touched."
+            exit 0
+          fi
+          echo "Guarded paths touched:"
+          while IFS= read -r path; do echo "  - $path"; done <<< "$hits"
+          case ",$LABELS," in
+            *,owner-approved,*) echo "Label owner-approved present: allowed."; exit 0 ;;
+          esac
+          echo "::error title=Guarded paths::This PR changes CI, the deploy policy, infrastructure, Quartermaster or agent rules. The owner must review it and add the 'owner-approved' label."
+          exit 1

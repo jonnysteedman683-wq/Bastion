@@ -353,7 +353,9 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.get("/api/roster")
         agents = json.loads(body)["agents"]
         self.assertEqual(status, 200)
-        self.assertEqual([a["name"] for a in agents], [a["name"] for a in app.load_roster()])
+        expected = [a["name"] for a in app.load_roster()]
+        expected += [s.name for s in app.load_sources() if s.name not in expected]
+        self.assertEqual([a["name"] for a in agents], expected)
         self.assertEqual(set(agents[0]), {"name", "role", "runs_on", "last_seen", "status"})
 
     def test_operations_is_bounded_and_never_exposes_output(self) -> None:

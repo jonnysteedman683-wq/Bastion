@@ -2,11 +2,13 @@
 
     python -m tools.report send --kind memory.write --summary "saved 3 notes"
     python -m tools.report run --label "nightly research" -- <the agent's command>
+    python -m tools.report hermes        (a Hermes shell hook: reads the hook's JSON from stdin)
 
 `send` posts one event to the command centre's POST /api/ingest. `run` wraps any command: it posts
 `run.started`, runs the command, then posts `run.finished` or `run.failed`, and exits with the
 command's own exit code. Reporting trouble is only ever a warning for `run`; it never stops or
-fails the agent.
+fails the agent. `hermes` turns a Hermes session hook into one event and always exits 0, so a
+reporting problem can never disturb Hermes.
 
 Configuration comes from the environment, never from arguments or files in this repository:
 
@@ -37,6 +39,17 @@ LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 MAX_SUMMARY_LENGTH = 4096  # the command centre rejects longer summaries
 MAX_FIELD_LENGTH = 128
 TIMEOUT_SECONDS = 5.0
+
+MAX_HOOK_BYTES = 8 * 1024 * 1024
+# Hermes hook event -> the kind Bastion shows. Anything else is reported as hermes.<event>.
+HERMES_KINDS = {
+    "on_session_start": "session.started",
+    "on_session_end": "turn.finished",
+    "on_session_finalize": "session.ended",
+    "on_session_reset": "session.reset",
+    "subagent_stop": "subagent.finished",
+}
+SAFE_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-")
 
 Post = Callable[[str, str, str, str, str], None]
 Run = Callable[[list[str]], Any]
@@ -156,12 +169,74 @@ def _run(args: argparse.Namespace, env: Mapping[str, str], post: Post, run: Run,
     return code
 
 
+def _word(value: object, fallback: str) -> str:
+    """A short identifier (model, platform) safe to show; anything odd becomes the fallback."""
+    if not isinstance(value, str) or not value or len(value) > MAX_FIELD_LENGTH or not set(value) <= SAFE_WORD:
+        return fallback
+    return value
+
+
+def hermes_event(payload: object) -> tuple[str, str]:
+    """The (kind, summary) for a Hermes shell-hook payload.
+
+    Only the event name, platform, model and outcome flags are used. Messages, history and tool
+    input stay on the machine: Bastion gets one line about what happened, never what was said.
+    """
+    if not isinstance(payload, dict):
+        raise ReportError("hook payload must be a JSON object")
+    name = _word(payload.get("hook_event_name"), "")
+    if not name:
+        raise ReportError("hook payload has no hook_event_name")
+    extra = payload.get("extra")
+    extra = extra if isinstance(extra, dict) else {}
+    platform_name = _word(extra.get("platform"), "unknown")
+    model = _word(extra.get("model"), "")
+    kind = HERMES_KINDS.get(name, f"hermes.{name}")
+    if name == "on_session_start":
+        summary = f"Session started on {platform_name}" + (f" with {model}" if model else "")
+    elif name == "on_session_end":
+        if extra.get("completed") is True:
+            outcome = "completed"
+        elif extra.get("interrupted") is True:
+            outcome = "interrupted"
+        else:
+            outcome = "failed"
+        summary = f"Turn {outcome} on {platform_name}"
+    elif name == "on_session_finalize":
+        summary = f"Session ended on {platform_name}"
+    elif name == "on_session_reset":
+        summary = f"Session reset on {platform_name}"
+    elif name == "subagent_stop":
+        summary = "Subagent finished"
+    else:
+        summary = f"Hermes event {name}"
+    return kind, summary
+
+
+def _hermes(args: argparse.Namespace, env: Mapping[str, str], post: Post, stdin: TextIO, err: TextIO) -> int:
+    try:
+        raw = stdin.read(MAX_HOOK_BYTES + 1)
+        if len(raw) > MAX_HOOK_BYTES:
+            raise ReportError("hook payload is too large")
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            raise ReportError("hook payload is not JSON") from None
+        kind, summary = hermes_event(payload)
+        base_url, key = _config(env)
+        post(base_url, key, kind, summary, args.source)
+    except ReportError as problem:
+        err.write(f"report: warning: Hermes event not reported: {problem}\n")
+    return 0  # never disturb Hermes over a reporting problem
+
+
 def main(
     argv: Sequence[str] | None = None,
     env: Mapping[str, str] | None = None,
     post: Post = post_event,
     run: Run = _run_command,
     err: TextIO | None = None,
+    stdin: TextIO | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.report", description="Report agent activity to Bastion.")
     sub = parser.add_subparsers(dest="action", required=True)
@@ -173,9 +248,13 @@ def main(
     wrap.add_argument("--label", default="", help="what to call this run (default: the program's name)")
     wrap.add_argument("--source", default=default_source(), help="where this ran (default: this machine's name)")
     wrap.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command to run")
+    hook = sub.add_parser("hermes", help="report a Hermes shell-hook event read from stdin")
+    hook.add_argument("--source", default=default_source(), help="where this ran (default: this machine's name)")
     args = parser.parse_args(argv)
     env = os.environ if env is None else env
     err = sys.stderr if err is None else err
     if args.action == "send":
         return _send(args, env, post, err)
+    if args.action == "hermes":
+        return _hermes(args, env, post, sys.stdin if stdin is None else stdin, err)
     return _run(args, env, post, run, err)

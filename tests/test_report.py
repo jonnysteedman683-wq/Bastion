@@ -186,5 +186,85 @@ class RunCommandTest(unittest.TestCase):
         self.assertEqual((post.events, ran), ([], []))
 
 
+class HermesHookTest(unittest.TestCase):
+    def fire(self, payload: object, env: dict[str, str] | None = None, fail: bool = False) -> tuple[int, Recorder, str]:
+        post = Recorder(fail=fail)
+        err = io.StringIO()
+        stdin = io.StringIO(payload if isinstance(payload, str) else json.dumps(payload))
+        code = report.main(["hermes"], env=ENV if env is None else env, post=post, err=err, stdin=stdin)
+        return code, post, err.getvalue()
+
+    def test_session_events_become_one_line_each(self) -> None:
+        cases = [
+            (
+                {"hook_event_name": "on_session_start", "extra": {"platform": "cli", "model": "anthropic/claude-x"}},
+                ("session.started", "Session started on cli with anthropic/claude-x"),
+            ),
+            (
+                {"hook_event_name": "on_session_end", "extra": {"platform": "telegram", "completed": True}},
+                ("turn.finished", "Turn completed on telegram"),
+            ),
+            (
+                {"hook_event_name": "on_session_end", "extra": {"platform": "cli", "interrupted": True}},
+                ("turn.finished", "Turn interrupted on cli"),
+            ),
+            (
+                {"hook_event_name": "on_session_end", "extra": {"platform": "cli"}},
+                ("turn.finished", "Turn failed on cli"),
+            ),
+            (
+                {"hook_event_name": "on_session_finalize", "extra": {"platform": "cli"}},
+                ("session.ended", "Session ended on cli"),
+            ),
+            ({"hook_event_name": "post_llm_call"}, ("hermes.post_llm_call", "Hermes event post_llm_call")),
+        ]
+        for payload, (kind, summary) in cases:
+            with self.subTest(kind=kind, summary=summary):
+                code, post, err = self.fire(payload)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual([(e["kind"], e["summary"]) for e in post.events], [(kind, summary)])
+
+    def test_what_was_said_never_leaves_the_machine(self) -> None:
+        payload = {
+            "hook_event_name": "on_session_start",
+            "session_id": "sess_private",
+            "cwd": "C:/Users/someone/secret-project",
+            "tool_input": {"command": "cat passwords.txt"},
+            "extra": {
+                "platform": "cli",
+                "model": "m",
+                "user_message": "my password is hunter2",
+                "conversation_history": [{"role": "user", "content": "hunter2"}],
+            },
+        }
+        _, post, _ = self.fire(payload)
+        sent = json.dumps(post.events)
+        for private in ("hunter2", "sess_private", "secret-project", "passwords.txt"):
+            self.assertNotIn(private, sent)
+
+    def test_odd_platform_or_model_values_are_not_passed_on(self) -> None:
+        payload = {
+            "hook_event_name": "on_session_start",
+            "extra": {"platform": "cli\nINJECTED line", "model": "x" * 500},
+        }
+        _, post, _ = self.fire(payload)
+        self.assertEqual(post.events[0]["summary"], "Session started on unknown")
+
+    def test_a_hook_never_fails_hermes(self) -> None:
+        good = {"hook_event_name": "on_session_start", "extra": {"platform": "cli"}}
+        for payload, env, fail in (
+            ("{not json", ENV, False),
+            ("[1, 2]", ENV, False),
+            ({"extra": {}}, ENV, False),
+            (good, {}, False),  # not configured
+            (good, ENV, True),  # Bastion down
+        ):
+            code, post, err = self.fire(payload, env=env, fail=fail)
+            self.assertEqual(code, 0)
+            self.assertEqual(post.events, [])
+            self.assertIn("warning", err)
+            self.assertNotIn("agent-secret", err)
+
+
 if __name__ == "__main__":
     unittest.main()

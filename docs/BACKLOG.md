@@ -31,6 +31,7 @@ Exit: a deliberate cap breach pauses the agent and alerts Jonny.
   - [ ] G1c Langfuse traces per run, linked from the run's ledger event.
   - [ ] G1d Enforce caps: an agent over its daily cap is halted and Jonny is alerted (ntfy via `linx notify`). *Done when* a deliberate breach pauses the agent and alerts.
 - [ ] G2 Trust ladder R0-R4 with automatic demotion
+- [x] G4 🔒 Guard check: `.github/workflows/guard.yml` fails a PR touching a guarded path (AGENTS.md, CODEOWNERS) unless the owner adds `owner-approved`; `tests/test_guard.py` keeps the three lists in sync. *Done when* a PR changing `.github/` is red without the label and green with it.
 - G3 Healthchecks.io dead-man checks for every scheduled job (split into G3a-G3c; see [DEADMAN.md](DEADMAN.md))
   - [x] G3a Check registry `deploy/healthchecks.json` and `python -m tools.deadman validate|plan|sync`
   - [ ] G3b 🔒 Ping `/start`, success and `/fail` from every listed job (edits `.github/` in 5 repos); *Done when* pausing AIH `analytics-archive` raises an alert within an hour and re-enabling it sends a recovery

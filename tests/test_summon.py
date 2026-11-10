@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import tempfile
@@ -162,6 +163,99 @@ class CliTest(unittest.TestCase):
             for v in body.values():
                 self.assertIsInstance(v, (str, int, bool))
             json.dumps(body)
+
+
+def _ints_only(value: Any) -> bool:
+    """The gateway's canon() rejects non-integer numbers anywhere in the body (unisync/gateway)."""
+    if isinstance(value, dict):
+        return all(_ints_only(v) for v in value.values())
+    if isinstance(value, list):
+        return all(_ints_only(v) for v in value)
+    return not isinstance(value, float)
+
+
+class UsageTest(unittest.TestCase):
+    def write(self, tmp: str, payload: Any) -> Path:
+        path = Path(tmp) / "usage.json"
+        path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_contract_fields_kept_and_cost_becomes_integer_micro_dollars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, {
+                "model": "claude-sonnet-5-5", "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.0123,
+            })  # fmt: skip
+            usage, warning = summon.load_usage(path)
+        self.assertEqual(warning, "")
+        self.assertEqual(usage, {
+            "model": "claude-sonnet-5-5", "input_tokens": 1234, "output_tokens": 567, "cost_micro_usd": 12300,
+        })  # fmt: skip
+        self.assertTrue(_ints_only(usage))
+
+    def test_untrusted_values_are_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, {
+                "model": 7, "input_tokens": -5, "output_tokens": True, "cost_usd": "1.0",
+                "extra": "x", "total": 3,
+            })  # fmt: skip
+            usage, warning = summon.load_usage(path)
+        self.assertIsNone(usage)
+        self.assertIn("no usable", warning)
+
+    def test_whole_float_tokens_are_kept_as_integers_and_values_are_clamped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, {"model": "m" * 500, "input_tokens": 10.0, "output_tokens": 2.5,
+                                    "cost_usd": 1e9})  # fmt: skip
+            usage, _ = summon.load_usage(path)
+        assert usage is not None
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertNotIn("output_tokens", usage)  # a fractional token count is not a count
+        self.assertEqual(len(usage["model"]), summon.MAX_MODEL)
+        self.assertEqual(usage["cost_micro_usd"], summon.MAX_COST_MICRO_USD)
+        self.assertTrue(_ints_only(usage))
+
+    def test_missing_malformed_or_non_object_files_give_a_warning_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = [Path(tmp) / "absent.json", self.write(tmp, "{not json"), self.write(tmp, [1, 2])]
+            for path in cases:
+                usage, warning = summon.load_usage(path)
+                self.assertIsNone(usage)
+                self.assertTrue(warning)
+
+
+class FinishUsageTest(CliTest):
+    def finish(self, tmp: str, code: int, *extra: str) -> tuple[str, dict[str, Any]]:
+        log = Path(tmp) / "out.txt"
+        log.write_text("Done.\n", encoding="utf-8")
+        self.run_cli(
+            "finish", "--task-id", "bastion/t-1", "--agent", "sebastian",
+            "--exit-code", str(code), "--log", str(log), *extra,
+        )  # fmt: skip
+        _, kind, _, body = self.ledgers["UNISYNC_AGENT_TOKEN"].posts[-1]
+        return kind, body
+
+    def test_usage_rides_on_result_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usage.json"
+            path.write_text(json.dumps({"model": "m", "input_tokens": 3, "output_tokens": 4}), encoding="utf-8")
+            for code, want in ((0, "task.result"), (2, "task.failed")):
+                kind, body = self.finish(tmp, code, "--usage", str(path))
+                self.assertEqual(kind, want)
+                self.assertEqual(body["usage"], {"model": "m", "input_tokens": 3, "output_tokens": 4})
+                self.assertTrue(_ints_only(body))
+
+    def test_bad_usage_file_still_reports_the_outcome(self) -> None:
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(err):
+            kind, body = self.finish(tmp, 0, "--usage", str(Path(tmp) / "absent.json"))
+        self.assertEqual(kind, "task.result")
+        self.assertNotIn("usage", body)
+        self.assertIn("usage", err.getvalue())
+
+    def test_without_usage_the_body_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, body = self.finish(tmp, 0)
+        self.assertEqual(body, summon.outcome(0, "Done.\n", run_url="")[1])
 
 
 if __name__ == "__main__":

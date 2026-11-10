@@ -24,7 +24,10 @@ Exit: a deliberate cap breach pauses the agent and alerts Jonny.
 
 - G1 Cost loop: per-run spend to the ledger, Langfuse traces, per-agent and daily caps (split into G1a-G1d)
   - [x] G1a Usage contract (`usage` on any ledger event; `ledger/bastion_spend.sql`) and the command centre's Spend view: today, 7 and 30 days, a 30-day chart, per-agent spend against display-only caps in `caps.json`. *Done when* a `task.result` carrying `usage` shows in today's total within a minute.
-  - [ ] G1b Agents report usage: `tools/summon finish --usage <file>` attaches it to `task.result`/`task.failed`; Sebastian writes that file from its tracer (🔒 in Sebastian: `src/sebastian/agent.py` is guarded). *Done when* a summoned Sebastian run's tokens appear in the Spend view.
+  - G1b Agents report usage (split into G1b-1..G1b-3). *Done when* a summoned Sebastian run's tokens appear in the Spend view.
+    - [x] G1b-1 `python -m tools.summon finish --usage FILE` attaches the agent's usage to `task.result`/`task.failed`: contract fields only, wrong types/negatives dropped, values clamped, `cost_usd` sent as integer `cost_micro_usd` (the gateway rejects non-integer numbers, so a float would lose the whole outcome); `bastion.spend_daily` counts `cost_micro_usd`. A bad file is a warning and the outcome still posts. *Done when* tests show a usage file riding on both outcomes with integers only, and a bad file never blocks the report.
+    - [ ] G1b-2 Sebastian writes the file: `sebastian demo/run/resume --usage-out FILE` from `RunResult.usage` in `cli.py` (no change to guarded `agent.py`). Lands in the Sebastian repo. *Done when* `sebastian demo --usage-out f` writes the model and token counts.
+    - [ ] G1b-3 🔒 Wire it: `summon.yml` passes `--usage-out` to `sebastian demo` and `--usage` to `summon finish`. *Done when* a summoned demo run shows in the Spend view.
   - [ ] G1c Langfuse traces per run, linked from the run's ledger event.
   - [ ] G1d Enforce caps: an agent over its daily cap is halted and Jonny is alerted (ntfy via `linx notify`). *Done when* a deliberate breach pauses the agent and alerts.
 - [ ] G2 Trust ladder R0-R4 with automatic demotion

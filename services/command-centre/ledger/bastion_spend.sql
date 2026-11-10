@@ -3,8 +3,10 @@
 --
 -- Usage contract (backlog G1): any ledger event may carry a `usage` object in its body, normally on
 -- task.result or task.failed:
---   "usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.0123}
--- Every field is optional. Agents write these bodies, so the view trusts nothing: a field counts only
+--   "usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_micro_usd": 12300}
+-- Every field is optional. Cost is integer micro-dollars because the UniSync gateway rejects non-integer numbers
+-- in envelopes (`tools/summon finish --usage` converts an agent's `cost_usd`); a `cost_usd` number written
+-- directly to Supabase is still counted. Agents write these bodies, so the view trusts nothing: a field counts only
 -- when it is a JSON number, negatives count as 0 and values are clamped, so one bad event can never
 -- break the view or inflate a total past the clamp.
 
@@ -25,8 +27,12 @@ select
       then least(greatest((u->>'input_tokens')::numeric, 0), 1e9) else 0 end)::bigint as input_tokens,
   sum(case when jsonb_typeof(u->'output_tokens') = 'number'
       then least(greatest((u->>'output_tokens')::numeric, 0), 1e9) else 0 end)::bigint as output_tokens,
-  round(sum(case when jsonb_typeof(u->'cost_usd') = 'number'
-      then least(greatest((u->>'cost_usd')::numeric, 0), 1e4) else 0 end), 6) as cost_usd
+  round(sum(least(
+      case when jsonb_typeof(u->'cost_usd') = 'number'
+        then greatest((u->>'cost_usd')::numeric, 0) else 0 end
+    + case when jsonb_typeof(u->'cost_micro_usd') = 'number'
+        then greatest((u->>'cost_micro_usd')::numeric, 0) / 1e6 else 0 end,
+    1e4)), 6) as cost_usd
 from usage
 group by day, agent;
 

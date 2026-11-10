@@ -7,6 +7,7 @@ appear in `ps` or in shell history. Only the hashes are printed; those are safe 
     python3 scram.py verifier   # stdin: password -> Postgres SCRAM-SHA-256 verifier
     python3 scram.py sha256     # stdin: token    -> SHA-256 hex
 """
+
 from __future__ import annotations
 
 import base64

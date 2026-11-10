@@ -3,6 +3,7 @@
 Nothing here touches a network, a cloud or a real service: gcloud, tailscale, systemctl, git and uv are
 replaced by stubs first on PATH, and forge-setup.sh runs against a throwaway FORGE_ROOT.
 """
+
 from __future__ import annotations
 
 import base64
@@ -20,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BUNDLE = ROOT / "deploy" / "forge-vm"
+BASH = shutil.which("bash") or "/bin/bash"
 RUNBOOK = ROOT / "docs" / "FORGE_VM.md"
 
 BUNDLE_FILES = (
@@ -100,7 +102,8 @@ def write_stub(directory: Path, name: str, body: str) -> None:
 
 
 def run(cmd: list[str], *, env: dict[str, str], stdin: str = "") -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, input=stdin, capture_output=True, text=True, env=env, timeout=120, check=False)
+    # Commands are built by these tests from fixed bundle paths, never from external input.
+    return subprocess.run(cmd, input=stdin, capture_output=True, text=True, env=env, timeout=120, check=False)  # noqa: S603
 
 
 def tree(root: Path) -> dict[str, tuple[int, bytes]]:
@@ -204,7 +207,9 @@ class BundleStaticTests(unittest.TestCase):
 
     def test_scripts_parse(self) -> None:
         for name in SCRIPTS:
-            result = subprocess.run(["bash", "-n", str(BUNDLE / name)], capture_output=True, text=True, check=False)
+            result = subprocess.run(  # noqa: S603 - fixed bundle path, test-controlled
+                [BASH, "-n", str(BUNDLE / name)], capture_output=True, text=True, check=False
+            )
             self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
             text = read(name)
             self.assertTrue(text.startswith("#!/usr/bin/env bash\n"), name)
@@ -304,7 +309,7 @@ class ScramTests(unittest.TestCase):
         self.assertEqual(base64.b64encode(signature).decode(), self.SERVER_SIGNATURE)
         # ClientKey = ClientProof XOR HMAC(StoredKey, AuthMessage); StoredKey = SHA-256(ClientKey)
         client_signature = hmac.new(stored_key, self.AUTH_MESSAGE, hashlib.sha256).digest()
-        client_key = bytes(a ^ b for a, b in zip(base64.b64decode(self.CLIENT_PROOF), client_signature))
+        client_key = bytes(a ^ b for a, b in zip(base64.b64decode(self.CLIENT_PROOF), client_signature, strict=True))
         self.assertEqual(hashlib.sha256(client_key).digest(), stored_key)
 
     def test_default_salt_is_random_and_16_bytes(self) -> None:
@@ -689,7 +694,7 @@ class RunbookTests(unittest.TestCase):
         numbered = [s for s in sections if re.match(r"\d+\. ", s)]
         numbers = [re.match(r"\d+", s).group() for s in numbered]
         self.assertEqual(numbers, [str(i) for i in range(1, len(self.STEPS) + 1)])
-        for section, step in zip(numbered, self.STEPS):
+        for section, step in zip(numbered, self.STEPS, strict=True):
             heading = section.splitlines()[0]
             self.assertIn(step, heading)
             last = section.strip().split("\n\n")[-1]

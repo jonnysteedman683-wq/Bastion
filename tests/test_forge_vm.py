@@ -55,8 +55,9 @@ AGENT_IDS = "claude-1,hermes-1,hermes-2,sebastian-1,lestinxor-1,jules-1"
 SECRET_NAMES = ("TS_AUTHKEY", "VORTEX_STORE_URL", "UNISYNC_VORTEX_TOKEN", "FORGE_PG_PASSWORD", "GITHUB_TOKEN")
 EXAMPLE_SECRETS = ("TS_AUTHKEY", "FORGE_PG_PASSWORD", "UNISYNC_VORTEX_TOKEN", "VORTEX_STORE_URL")
 PROJECT_REF = "dcjqwnapxgocitvntzzm"
-# Vortex-MCP main at the merge of apikey mode (2cc7fd2), in two halves so scanners do not read it as a key.
-VORTEX_REF = "2cc7fd26474a0c5d3330" + "3655d217183a8e28a2f3"
+# Vortex-MCP main at the merge of the P1a review follow-ups (0bb2d4d, includes apikey mode), in two
+# halves so scanners do not read it as a key.
+VORTEX_REF = "0bb2d4d1ba78f549475d" + "551d8cb04ef43e94f3e3"
 EXAMPLE_PINS = {
     "VORTEX_REF": VORTEX_REF,
     "VORTEX_SCHEMA": "forge",

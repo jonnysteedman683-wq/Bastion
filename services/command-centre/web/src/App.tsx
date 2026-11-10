@@ -412,13 +412,14 @@ function CommandMap({ agents, events, now }: { agents?: Agent[]; events?: Ledger
   ];
 
   const nodes = filteredAgents.slice(0, 6).map((agent, index) => ({ ...agent, x: positions[index]?.x ?? 50, y: positions[index]?.y ?? 50 }));
+  type LinkState = "accepted" | "pending" | "active" | "declined";
   const links = [
-    { from: nodes[0]?.name, to: nodes[1]?.name, state: "accepted" as const },
-    { from: nodes[1]?.name, to: nodes[2]?.name, state: "pending" as const },
-    { from: nodes[2]?.name, to: nodes[3]?.name, state: "accepted" as const },
-    { from: nodes[3]?.name, to: nodes[4]?.name, state: "active" as const },
-    { from: nodes[4]?.name, to: nodes[5]?.name, state: "pending" as const },
-    { from: nodes[5]?.name, to: nodes[0]?.name, state: "active" as const },
+    { from: nodes[0]?.name, to: nodes[1]?.name, state: "accepted" as LinkState },
+    { from: nodes[1]?.name, to: nodes[2]?.name, state: "pending" as LinkState },
+    { from: nodes[2]?.name, to: nodes[3]?.name, state: "accepted" as LinkState },
+    { from: nodes[3]?.name, to: nodes[4]?.name, state: "active" as LinkState },
+    { from: nodes[4]?.name, to: nodes[5]?.name, state: "pending" as LinkState },
+    { from: nodes[5]?.name, to: nodes[0]?.name, state: "active" as LinkState },
   ].filter((link) => link.from && link.to);
 
   const selectedNode = nodes.find((node) => node.name === selected) ?? nodes[0] ?? null;

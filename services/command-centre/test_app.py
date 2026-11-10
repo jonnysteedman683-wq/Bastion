@@ -684,6 +684,137 @@ class LedgerConfigTest(unittest.TestCase):
             app.ledger_from_env({"LEDGER_DSN": "https://x.supabase.co"})
 
 
+class SourceRegistryTest(unittest.TestCase):
+    def load(self, data: object) -> tuple[list[app.Source], list[str]]:
+        warnings: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sources.json"
+            path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
+            return app.load_sources(path, warn=warnings.append), warnings
+
+    def test_loads_each_type(self) -> None:
+        sources, warnings = self.load(
+            [
+                {"name": "Den Ollama", "type": "ollama", "endpoint": "http://192.168.1.20:11434", "poll_interval": 30},
+                {
+                    "name": "LM Studio",
+                    "type": "openai",
+                    "endpoint": "https://lm.example/v1/",
+                    "auth": {"env": "LM_STUDIO_KEY"},
+                },
+                {"name": "Hermes", "type": "push"},
+            ]
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            sources,
+            [
+                app.Source("Den Ollama", "ollama", "http://192.168.1.20:11434", None, 30),
+                app.Source("LM Studio", "openai", "https://lm.example/v1", "LM_STUDIO_KEY", app.DEFAULT_POLL_SECONDS),
+                app.Source("Hermes", "push", None, None, app.DEFAULT_POLL_SECONDS),
+            ],
+        )
+
+    def test_missing_file_is_no_sources(self) -> None:
+        warnings: list[str] = []
+        self.assertEqual(app.load_sources(Path("does-not-exist.json"), warn=warnings.append), [])
+        self.assertEqual(warnings, [])
+
+    def test_unreadable_file_is_no_sources_and_a_warning(self) -> None:
+        for data in ("{not json", {"name": "x"}):
+            sources, warnings = self.load(data)
+            self.assertEqual(sources, [])
+            self.assertEqual(len(warnings), 1)
+
+    def test_bad_entries_are_skipped_not_fatal(self) -> None:
+        good = {"name": "Good", "type": "ollama", "endpoint": "http://localhost:11434"}
+        bad: list[object] = [
+            "not an object",
+            {"name": "", "type": "push"},
+            {"name": "x" * 200, "type": "push"},
+            {"name": "No type"},
+            {"name": "Unknown type", "type": "telnet", "endpoint": "http://h"},
+            {"name": "No endpoint", "type": "ollama"},
+            {"name": "Bad scheme", "type": "ollama", "endpoint": "file:///etc/passwd"},
+            {"name": "Userinfo", "type": "openai", "endpoint": "https://user:pw@h.example"},
+            {"name": "Query", "type": "openai", "endpoint": "https://h.example/v1?key=abc"},
+            {"name": "Raw secret", "type": "openai", "endpoint": "https://h.example", "auth": "sk-live-abc"},
+            {"name": "Secret value", "type": "openai", "endpoint": "https://h.example", "auth": {"env": "sk-live-abc"}},
+            {"name": "Extra auth", "type": "openai", "endpoint": "https://h.example", "auth": {"env": "K", "key": "v"}},
+            {"name": "Bool interval", "type": "ollama", "endpoint": "http://h", "poll_interval": True},
+            {"name": "Text interval", "type": "ollama", "endpoint": "http://h", "poll_interval": "60"},
+            {"name": "Good", "type": "push"},  # duplicate name
+        ]
+        sources, warnings = self.load([good, *bad])
+        self.assertEqual([s.name for s in sources], ["Good"])
+        self.assertEqual(len(warnings), len(bad))
+
+    def test_warnings_never_repeat_auth_values(self) -> None:
+        _, warnings = self.load(
+            [{"name": "Leaky", "type": "openai", "endpoint": "https://h.example", "auth": "sk-live-abc"}]
+        )
+        self.assertNotIn("sk-live-abc", " ".join(warnings))
+
+    def test_poll_interval_is_clamped(self) -> None:
+        sources, _ = self.load(
+            [
+                {"name": "Fast", "type": "ollama", "endpoint": "http://h", "poll_interval": 1},
+                {"name": "Slow", "type": "ollama", "endpoint": "http://h", "poll_interval": 10**9},
+            ]
+        )
+        self.assertEqual([s.poll_interval for s in sources], [app.MIN_POLL_SECONDS, app.MAX_POLL_SECONDS])
+
+    def test_roster_entry_shows_host_but_never_auth(self) -> None:
+        source = app.Source("LM Studio", "openai", "https://lm.example:8443/v1", "LM_STUDIO_KEY", 60)
+        self.assertEqual(
+            app.source_roster_entry(source),
+            {"name": "LM Studio", "role": "OpenAI-compatible models", "runs_on": "lm.example:8443"},
+        )
+        self.assertEqual(app.source_roster_entry(app.Source("Hermes", "push", None, None, 60))["runs_on"], "Reports in")
+
+    def test_sources_join_the_roster_after_the_ledger_agents(self) -> None:
+        base = FixedLedger([])
+        sources = [
+            app.Source("Den Ollama", "ollama", "http://192.168.1.20:11434", None, 60),
+            app.Source("Claude", "push", None, None, 60),  # already on the ledger roster: not listed twice
+        ]
+        names = [a["name"] for a in app.MergedLedger(base, sources).roster()]
+        self.assertEqual(names, [*(a["name"] for a in app.load_roster()), "Den Ollama"])
+
+    def test_configured_source_shows_in_the_served_roster(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sources.json"
+            path.write_text(json.dumps([{"name": "Hermes", "type": "push"}]), encoding="utf-8")
+            previous_db = app.INGEST_DB_PATH
+            app.INGEST_DB_PATH = Path(tmp) / "ingest.db"
+            server = app.build_server(
+                0,
+                "abc1234",
+                host="127.0.0.1",
+                ledger=FixedLedger([]),
+                static_dir=Path(tmp),
+                auth=FakeAuth(),
+                sources_path=path,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/roster",
+                    headers={"Cookie": "bastion_session=valid-token"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    agents = json.loads(response.read())["agents"]
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                app.INGEST_DB_PATH = previous_db
+        hermes = next(a for a in agents if a["name"] == "Hermes")
+        self.assertEqual(hermes["status"], "silent")
+        self.assertEqual(set(hermes), {"name", "role", "runs_on", "last_seen", "status"})
+
+
 if __name__ == "__main__":
     unittest.main()
 

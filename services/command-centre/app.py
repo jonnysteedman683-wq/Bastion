@@ -2,6 +2,7 @@
 
     GET /health        -> {"status": "ok", "service": "command-centre", "version": "<git sha>"}
     GET /api/roster    -> {"source": ..., "agents": [{name, role, runs_on, last_seen, status}]}
+                          the ledger's agents, then the AI systems registered in sources.json
     GET /api/feed      -> {"source": ..., "events": [{id, ts, agent, kind, summary}]}, newest first
                           ?after=<id> returns only newer events; ?limit=<n> caps the count (max 200)
     GET /api/spend     -> {"source": ..., "today"/"last_7d"/"last_30d": {cost_usd, tokens, runs, ...},
@@ -47,6 +48,17 @@ HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "web" / "dist"
 ROSTER_PATH = HERE / "roster.json"
 CAPS_PATH = HERE / "caps.json"
+SOURCES_PATH = Path(os.environ.get("SOURCES_CONFIG", str(HERE / "sources.json")))
+SOURCE_ROLES = {
+    "ollama": "Ollama models",
+    "openai": "OpenAI-compatible models",
+    "push": "Reports to Bastion",
+}
+DEFAULT_POLL_SECONDS = 60
+MIN_POLL_SECONDS = 10
+MAX_POLL_SECONDS = 86_400
+# An auth entry names the environment variable that holds the key. It is never the key itself.
+ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 SPEND_DAYS = 30
 SPEND_FIELDS = ("day", "agent", "runs", "input_tokens", "output_tokens", "cost_usd")
 CAP_NEAR = 0.8  # share of a cap at which spend shows as "near"
@@ -527,14 +539,110 @@ def ingest_events(after: int = 0, limit: int = MAX_LIMIT) -> list[Event]:
     return [Event(int(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4])) for r in rows]
 
 
+# --- Source registry (other AI systems) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Source:
+    """One named AI system connected to Bastion.
+
+    type "ollama" or "openai": a model server Bastion can poll at `endpoint`.
+    type "push": a system that reports in through POST /api/ingest under the same name.
+    """
+
+    name: str
+    type: str
+    endpoint: str | None
+    auth_env: str | None
+    poll_interval: int
+
+
+def _warn(message: str) -> None:
+    sys.stderr.write(json.dumps({"severity": "WARNING", "service": SERVICE, "message": message}) + "\n")
+
+
+def _source_endpoint(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 2048:
+        raise ValueError("endpoint must be an http(s) URL")
+    parts = urllib.parse.urlsplit(value.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("endpoint must be an http(s) URL")
+    if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
+        raise ValueError("endpoint must not carry credentials, a query or a fragment")
+    _ = parts.port  # raises ValueError on a port that is not a number in range
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+def _parse_source(entry: object) -> Source:
+    if not isinstance(entry, dict):
+        raise ValueError("must be a JSON object")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > MAX_STRING_FIELD_LENGTH:
+        raise ValueError("name must be 1 to 128 characters")
+    kind = entry.get("type")
+    if not isinstance(kind, str) or kind not in SOURCE_ROLES:
+        raise ValueError("type must be one of " + ", ".join(sorted(SOURCE_ROLES)))
+    endpoint = None
+    if kind != "push" or entry.get("endpoint") is not None:
+        endpoint = _source_endpoint(entry.get("endpoint"))
+    auth_env = None
+    auth = entry.get("auth")
+    if auth is not None:
+        # Never echo what was configured here: a mistake is most likely a pasted key.
+        if not isinstance(auth, dict) or set(auth) != {"env"}:
+            raise ValueError('auth must be {"env": "<ENVIRONMENT_VARIABLE_NAME>"}')
+        auth_env = auth["env"]
+        if not isinstance(auth_env, str) or not ENV_NAME.fullmatch(auth_env):
+            raise ValueError("auth.env must name an environment variable, not hold a key")
+    interval = entry.get("poll_interval", DEFAULT_POLL_SECONDS)
+    if isinstance(interval, bool) or not isinstance(interval, int):
+        raise ValueError("poll_interval must be a whole number of seconds")
+    return Source(name.strip(), kind, endpoint, auth_env, min(max(interval, MIN_POLL_SECONDS), MAX_POLL_SECONDS))
+
+
+def load_sources(path: Path | None = None, warn: Any = _warn) -> list[Source]:
+    """Read the source registry. A bad entry is skipped with a warning; it never stops the server."""
+    path = SOURCES_PATH if path is None else path
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        warn(f"sources: {path.name} is not readable JSON; no sources loaded")
+        return []
+    if not isinstance(data, list):
+        warn(f"sources: {path.name} must be a JSON list; no sources loaded")
+        return []
+    sources: list[Source] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(data):
+        try:
+            source = _parse_source(entry)
+            if source.name.casefold() in seen:
+                raise ValueError("name is already used by another source")
+        except ValueError as err:
+            warn(f"sources: entry {index} skipped: {err}")
+            continue
+        seen.add(source.name.casefold())
+        sources.append(source)
+    return sources
+
+
+def source_roster_entry(source: Source) -> dict[str, str]:
+    """What the roster shows for a source: where it is, never how Bastion authenticates to it."""
+    runs_on = urllib.parse.urlsplit(source.endpoint).netloc if source.endpoint else "Reports in"
+    return {"name": source.name, "role": SOURCE_ROLES[source.type], "runs_on": runs_on}
+
+
 # --- Ledger wrapper that merges ingest buffer -----------------------------------------------
 
 
 class MergedLedger:
-    """Wraps a base ledger and merges in locally ingested events."""
+    """Wraps a base ledger, merging in locally ingested events and the configured sources."""
 
-    def __init__(self, base: Ledger) -> None:
+    def __init__(self, base: Ledger, sources: list[Source] | None = None) -> None:
         self._base = base
+        self._sources = list(sources or [])
         self.source = base.source
 
     def events(self, after: int, limit: int) -> list[Event]:
@@ -547,7 +655,9 @@ class MergedLedger:
         return sorted([*base_events, *local_events], key=lambda event: (event.ts, event.id), reverse=True)[:limit]
 
     def roster(self) -> list[dict[str, str]]:
-        return self._base.roster()
+        roster = list(self._base.roster())
+        known = {agent["name"].casefold() for agent in roster}
+        return [*roster, *(source_roster_entry(s) for s in self._sources if s.name.casefold() not in known)]
 
     def operations(self) -> dict[str, object]:
         return self._base.operations()
@@ -906,7 +1016,7 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                 return
             source = str(payload.get("source", "unknown")).strip()[:MAX_STRING_FIELD_LENGTH] or "unknown"
             kind = str(payload.get("kind", "event")).strip()[:MAX_STRING_FIELD_LENGTH] or "event"
-            summary = str(payload.get("summary", "")).strip()[:MAX_SUMMARY_LENGTH]
+            summary = str(payload.get("summary", "")).strip()
             if not summary:
                 self._json(400, {"error": "summary required"})
                 return
@@ -987,10 +1097,10 @@ def build_server(
     ledger: Ledger | None = None,
     static_dir: Path = STATIC_DIR,
     auth: Auth | None = None,
+    sources_path: Path | None = None,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(
-        version, MergedLedger(ledger or ledger_from_env()), static_dir, auth or AuthClient.from_env()
-    )
+    merged = MergedLedger(ledger or ledger_from_env(), load_sources(sources_path))
+    handler = make_handler(version, merged, static_dir, auth or AuthClient.from_env())
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

@@ -7,6 +7,7 @@ Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog
 - `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Display only until G1d.
 - `web/`: React + Tailwind + shadcn/ui. The browser only talks to `app.py`, never to Supabase.
 - `roster.json`: the agents shown on the roster.
+- `sources.json`: other AI systems connected to Bastion (see [Sources](#sources)).
 - `ledger/bastion_reader.sql`: read-only `bastion.feed` and `bastion.roster` views over the existing UniSync tables
   (Supabase project UNISYNCARC), and the `bastion_reader` role that can read only those.
 - `ledger/bastion_spend.sql`: `bastion.spend_daily`, token and dollar usage per agent per UTC day.
@@ -73,6 +74,31 @@ curl --request POST http://localhost:8080/api/ingest \
 
 Removing an agent from `INGEST_AGENT_KEYS` revokes its access; replacing only its value rotates its key. Keep the
 command centre private: agents receive the ingest endpoint and their own secret, never database credentials.
+
+## Sources
+
+`sources.json` is the registry of other AI systems connected to Bastion. It is read once at startup (set
+`SOURCES_CONFIG` to read a different file), and every source in it joins the roster after the ledger's agents:
+
+```json
+[
+  {"name": "Den Ollama", "type": "ollama", "endpoint": "http://192.168.1.20:11434", "poll_interval": 60},
+  {"name": "LM Studio", "type": "openai", "endpoint": "https://lm.example/v1", "auth": {"env": "LM_STUDIO_KEY"}},
+  {"name": "Hermes", "type": "push"}
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Shown on the roster. Unique; a name already on the ledger roster is not listed twice. |
+| `type` | `ollama` or `openai` (a model server Bastion polls, backlog H3), or `push` (the system reports in). |
+| `endpoint` | `http(s)` URL of the server. Required unless `push`. No credentials, query or fragment in the URL. |
+| `auth` | Optional `{"env": "NAME"}`: the *name* of the environment variable holding the key. Never the key. |
+| `poll_interval` | Seconds between polls, 10 to 86400, default 60. |
+
+A `push` source shows as active once it posts to `/api/ingest` with a key registered under the same name in
+`INGEST_AGENT_KEYS`. A bad entry is skipped with a warning in the log and the rest still load; a warning never
+repeats what was written under `auth`. The roster shows a source's host, never its auth.
 
 ## Sign-in
 

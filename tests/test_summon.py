@@ -258,5 +258,86 @@ class FinishUsageTest(CliTest):
         self.assertEqual(body, summon.outcome(0, "Done.\n", run_url="")[1])
 
 
+TRACE = "https://cloud.langfuse.com/project/proj-1/traces/abc123"
+
+
+class TraceUrlTest(unittest.TestCase):
+    def test_langfuse_cloud_trace_links_are_kept(self) -> None:
+        for url in (
+            TRACE,
+            "https://us.cloud.langfuse.com/project/p/traces/t-1",
+            "https://jp.cloud.langfuse.com/project/p/traces/t",
+        ):
+            self.assertEqual(summon.trace_url(url, env={}), (url, ""))
+
+    def test_self_hosted_langfuse_is_allowed_through_langfuse_host(self) -> None:
+        url = "https://langfuse.example.net/project/p/traces/t"
+        self.assertEqual(summon.trace_url(url, env={"LANGFUSE_HOST": "https://langfuse.example.net"}), (url, ""))
+        self.assertIsNone(summon.trace_url(url, env={})[0])
+        # A plain-http LANGFUSE_HOST never widens what is linked from the dashboard.
+        self.assertIsNone(summon.trace_url(url, env={"LANGFUSE_HOST": "http://langfuse.example.net"})[0])
+
+    def test_anything_else_is_dropped_with_a_warning(self) -> None:
+        bad = [
+            "http://cloud.langfuse.com/project/p/traces/t",  # not https
+            "javascript:alert(1)",
+            "https://evil.example/project/p/traces/t",  # wrong host
+            "https://cloud.langfuse.com.evil.example/project/p/traces/t",
+            "https://user@cloud.langfuse.com/project/p/traces/t",  # userinfo
+            "https://cloud.langfuse.com:8443/project/p/traces/t",  # port
+            "https://cloud.langfuse.com/project/p/traces/t?x=1",  # query
+            "https://cloud.langfuse.com/project/p/traces/t#f",
+            "https://cloud.langfuse.com/project/p/sessions/s",  # not a trace
+            "https://cloud.langfuse.com/project/p/traces/t\nx",
+            TRACE + "a" * 600,  # too long
+            7,
+            None,
+            True,
+            ["x"],
+        ]
+        for value in bad:
+            url, warning = summon.trace_url(value, env={})
+            self.assertIsNone(url, value)
+            self.assertTrue(warning, value)
+
+    def test_absent_trace_is_silent(self) -> None:
+        self.assertEqual(summon.trace_url(None, env={}, present=False), (None, ""))
+
+
+class FinishTraceTest(FinishUsageTest):
+    def test_trace_url_from_the_usage_file_rides_on_both_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usage.json"
+            path.write_text(json.dumps({"model": "m", "input_tokens": 3, "trace_url": TRACE}), encoding="utf-8")
+            for code in (0, 2):
+                _, body = self.finish(tmp, code, "--usage", str(path))
+                self.assertEqual(body["trace_url"], TRACE)
+                self.assertNotIn("trace_url", body["usage"])  # the Spend view's contract stays as it was
+                for v in body.values():
+                    self.assertIsInstance(v, (str, int, bool, dict))
+
+    def test_trace_alone_is_still_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usage.json"
+            path.write_text(json.dumps({"trace_url": TRACE}), encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                _, body = self.finish(tmp, 0, "--usage", str(path))
+        self.assertEqual(body["trace_url"], TRACE)
+        self.assertNotIn("usage", body)
+
+    def test_a_bad_trace_url_is_a_warning_and_the_outcome_still_posts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usage.json"
+            path.write_text(json.dumps({"model": "m", "trace_url": "javascript:alert(1)"}), encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                kind, body = self.finish(tmp, 0, "--usage", str(path))
+        self.assertEqual(kind, "task.result")
+        self.assertNotIn("trace_url", body)
+        self.assertEqual(body["usage"], {"model": "m"})
+        self.assertIn("trace_url", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

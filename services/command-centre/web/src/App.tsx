@@ -1,5 +1,5 @@
-import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
-import { FormEvent, Suspense, lazy, useState } from "react";
+import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { FormEvent, Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -11,13 +11,13 @@ import { isOverdue, isSafeGithubUrl, killSwitchCommand, timeAgo, waitingSince, t
 import { cn } from "@/lib/utils";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
-// Recharts is heavy: load the Spend view, and the chart library with it, only when it is opened.
 const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
 
-export type View = "operations" | "approvals" | "spend" | "roster" | "ledger";
+export type View = "operations" | "approvals" | "spend" | "roster" | "ledger" | "map";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
+  { id: "map", label: "Command map", icon: Map },
   { id: "approvals", label: "Approvals", icon: Inbox },
   { id: "spend", label: "Spend", icon: Coins },
   { id: "roster", label: "Roster", icon: Bot },
@@ -82,6 +82,7 @@ export default function App() {
         {operations.data?.control.halted && <HaltBanner control={operations.data.control} now={now} />}
 
         {view === "operations" && <Operations data={operations.data} now={now} />}
+        {view === "map" && <CommandMap agents={roster.data?.agents} events={feed.events} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
         {view === "spend" && (
           <Suspense fallback={<Skeleton className="h-96 w-full" />}>
@@ -110,28 +111,121 @@ function Login() {
     }
   }
 
-  return <main className="mx-auto flex min-h-svh max-w-md items-center p-6"><Card className="w-full"><CardHeader><CardTitle>Sign in to Bastion</CardTitle><CardDescription>Enter your approved email address and we’ll send a sign-in link.</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={submit}><label className="block text-sm font-medium" htmlFor="email">Email</label><input id="email" className="w-full rounded-md border bg-background px-3 py-2" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /><button className="w-full rounded-md bg-primary px-3 py-2 text-primary-foreground disabled:opacity-60" disabled={state === "sending"}>{state === "sending" ? "Sending…" : "Email me a sign-in link"}</button>{state === "sent" && <p className="text-sm text-muted-foreground">If the account is eligible, a sign-in link has been sent.</p>}{state === "error" && <p className="text-sm text-destructive">We couldn’t send that link. Please try again.</p>}</form></CardContent></Card></main>;
+  return (
+    <main className="mx-auto flex min-h-svh max-w-md items-center p-6">
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle>Sign in to Bastion</CardTitle>
+          <CardDescription>Enter your approved email to receive a secure sign-in link.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} className="space-y-4">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              placeholder="you@example.com"
+              autoComplete="email"
+              required
+            />
+            <button
+              type="submit"
+              disabled={state === "sending"}
+              className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            >
+              {state === "sending" ? "Sending link..." : state === "sent" ? "Link sent" : "Send sign-in link"}
+            </button>
+            {state === "error" && <p className="text-sm text-destructive">We could not send the link. Try again.</p>}
+          </form>
+        </CardContent>
+      </Card>
+    </main>
+  );
 }
 
 function Operations({ data, now }: { data: OperationsResponse | null; now: Date }) {
   if (!data) return <Skeleton className="h-96 w-full" />;
   const counts = data.tasks.reduce<Record<string, number>>((all, task) => ({ ...all, [task.status]: (all[task.status] ?? 0) + 1 }), {});
   const staleReport = data.pr_report && now.getTime() - new Date(data.pr_report.scanned_ts).getTime() > 26 * 60 * 60 * 1000;
-  return <div className="space-y-6">
-    <KillSwitch control={data.control} now={now} />
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-      <Metric label="Needs attention" value={data.attention.length} />
-      <Metric label="Completed" value={counts.done ?? 0} />
-      <Metric label="In progress" value={(counts.open ?? 0) + (counts.claimed ?? 0)} />
-      <Metric label="Open PRs" value={data.pr_report?.items.length ?? 0} />
+
+  return (
+    <div className="space-y-6">
+      <KillSwitch control={data.control} now={now} />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Metric label="Needs attention" value={data.attention.length} />
+        <Metric label="Completed" value={counts.done ?? 0} />
+        <Metric label="In progress" value={(counts.open ?? 0) + (counts.claimed ?? 0)} />
+        <Metric label="Open PRs" value={data.pr_report?.items.length ?? 0} />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Attention now</CardTitle>
+            <CardDescription>Blocked work and decisions that need you.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.attention.length ? (
+              <ul className="space-y-3 text-sm">
+                {data.attention.map((item) => (
+                  <li key={`${item.kind}-${item.title}`} className="rounded-md border bg-muted/30 p-3">
+                    <div className="font-medium">{item.title}</div>
+                    <div className="mt-1 text-muted-foreground">{item.detail}</div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No open blockers.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Goal progress</CardTitle>
+            <CardDescription>Tracked work by lifecycle status.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(counts).map(([status, count]) => (
+                <Badge key={status} variant="secondary">
+                  {status}: {count}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending merge requests</CardTitle>
+            <CardDescription>
+              {data.pr_report ? `${staleReport ? "Report is stale — " : ""}Scanned ${timeAgo(data.pr_report.scanned_ts, now)}` : "No steward report available."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.pr_report ? (
+              <ul className="space-y-2 text-sm">
+                {data.pr_report.items.slice(0, 3).map((item) => (
+                  <li key={item.pr} className="rounded-md border p-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium">{item.pr}</span>
+                      <Badge variant="outline">{item.bucket}</Badge>
+                    </div>
+                    <div className="mt-1 text-muted-foreground">{item.note}</div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No PR data available yet.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <FeedCard events={data.completions} now={now} limit={8} />
+      </div>
     </div>
-    <div className="grid gap-6 lg:grid-cols-2">
-      <Card><CardHeader><CardTitle>Attention now</CardTitle><CardDescription>Blocked work and decisions that need you.</CardDescription></CardHeader><CardContent>{data.attention.length ? <ul className="space-y-3">{data.attention.map((item, i) => <li key={i}><Badge variant="outline" className="mr-2 border-red-500/40 text-red-700">{item.kind}</Badge><span className="font-medium">{item.title}</span><p className="mt-1 text-sm text-muted-foreground">{item.detail}</p></li>)}</ul> : <p className="text-sm text-muted-foreground">Nothing needs attention.</p>}</CardContent></Card>
-      <Card><CardHeader><CardTitle>Goal progress</CardTitle><CardDescription>Tracked work by lifecycle status.</CardDescription></CardHeader><CardContent><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([status, count]) => <Badge key={status} variant="secondary">{status}: {count}</Badge>)}</div><ul className="mt-4 space-y-2">{data.tasks.slice(0, 8).map(task => <li key={task.task_id} className="flex justify-between gap-3 text-sm"><span>{task.title}</span><span className="text-muted-foreground">{task.status}</span></li>)}</ul></CardContent></Card>
-      <Card><CardHeader><CardTitle>Pending merge requests</CardTitle><CardDescription>{data.pr_report ? `${staleReport ? "Report is stale — " : ""}Scanned ${timeAgo(data.pr_report.scanned_ts, now)}` : "No PR report received yet."}</CardDescription></CardHeader><CardContent>{data.pr_report ? <ul className="space-y-3">{data.pr_report.items.map(pr => <li key={pr.pr} className="text-sm"><Badge variant="outline" className="mr-2">{pr.bucket}</Badge>{isSafeGithubUrl(pr.url) ? <a className="font-medium underline" href={pr.url}>{pr.pr}</a> : <span className="font-medium">{pr.pr}</span>}<span className="ml-2 text-muted-foreground">{pr.note}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">The PR steward has not reported yet.</p>}</CardContent></Card>
-      <FeedCard events={data.completions} now={now} limit={8} />
-    </div>
-  </div>;
+  );
 }
 
 function Approvals({ items, now }: { items?: Approval[]; now: Date }) {
@@ -142,8 +236,7 @@ function Approvals({ items, now }: { items?: Approval[]; now: Date }) {
           <Inbox className="size-4" aria-hidden /> Waiting for you
         </CardTitle>
         <CardDescription>
-          Oldest first. Decisions are signed by your owner key, which lives only on your PC: copy a command and run it
-          there. Bastion never holds the key.
+          Oldest first. Decisions are signed by your owner key, which lives only on your PC: copy a command and run it there. Bastion never holds the key.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -167,18 +260,14 @@ function Approvals({ items, now }: { items?: Approval[]; now: Date }) {
                           waiting over a day
                         </Badge>
                       )}
-                      <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                        asked {timeAgo(waitingSince(item), now)}
-                      </span>
+                      <span className="ml-auto text-xs tabular-nums text-muted-foreground">asked {timeAgo(waitingSince(item), now)}</span>
                     </div>
                     <p className="text-sm text-muted-foreground">
                       {[item.requested_by && `from ${item.requested_by}`, item.agent && `for ${item.agent}`, item.mode && `mode ${item.mode}`]
                         .filter(Boolean)
                         .join(" · ")}
                       {item.detail && <> — {item.detail}</>}
-                      {isSafeGithubUrl(item.run_url) && (
-                        <> · <a className="underline" href={item.run_url}>run</a></>
-                      )}
+                      {isSafeGithubUrl(item.run_url) && <> · <a className="underline" href={item.run_url}>run</a></>}
                     </p>
                     {item.approve_command && item.reject_command ? (
                       <div className="flex flex-wrap gap-2">
@@ -224,10 +313,7 @@ function KillSwitch({ control, now }: { control: Control; now: Date }) {
           </Badge>
         </CardTitle>
         <CardDescription>
-          {control.halted
-            ? `Nightly work and the memory loop are stopped${control.since ? ` (${timeAgo(control.since, now)})` : ""}.`
-            : "Halting stops nightly work and pauses the memory loop."}{" "}
-          Only your owner key can flip it: copy the command and run it on your PC.
+          {control.halted ? `Nightly work and the memory loop are stopped${control.since ? ` (${timeAgo(control.since, now)})` : ""}.` : "Halting stops nightly work and pauses the memory loop."} Only your owner key can flip it: copy the command and run it on your PC.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -248,6 +334,7 @@ function CopyCommand({ label, command }: { label: string; command: string }) {
       setCopied(false);
     }
   }
+
   return (
     <button
       type="button"
@@ -262,7 +349,16 @@ function CopyCommand({ label, command }: { label: string; command: string }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) { return <Card className="gap-2 py-4"><CardHeader className="px-4"><CardDescription>{label}</CardDescription></CardHeader><CardContent className="px-4 text-2xl font-semibold tabular-nums">{value}</CardContent></Card>; }
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <Card className="gap-2 py-4">
+      <CardHeader className="px-4">
+        <CardDescription>{label}</CardDescription>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 text-2xl font-semibold tracking-tight">{value}</CardContent>
+    </Card>
+  );
+}
 
 function SourceBadge({ source }: { source: "demo" | "ledger" | null }) {
   if (!source) return null;
@@ -279,17 +375,251 @@ function SourceBadge({ source }: { source: "demo" | "ledger" | null }) {
 
 const STATUS_DOT: Record<Agent["status"], string> = { active: "bg-ok", idle: "bg-warn", silent: "bg-idle" };
 
-function RosterCard({
-  agents,
-  now,
-  compact,
-  className,
-}: {
-  agents?: Agent[];
-  now: Date;
-  compact?: boolean;
-  className?: string;
-}) {
+function CommandMap({ agents, events, now }: { agents?: Agent[]; events?: LedgerEvent[]; now: Date }) {
+  const roster = agents ?? [];
+  const [statusFilter, setStatusFilter] = useState<"all" | Agent["status"]>("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | string>("all");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const roles = useMemo(() => Array.from(new Set(roster.map((agent) => agent.role))), [roster]);
+  const filteredAgents = useMemo(
+    () =>
+      roster.filter((agent) => {
+        const matchesStatus = statusFilter === "all" || agent.status === statusFilter;
+        const matchesRole = roleFilter === "all" || agent.role === roleFilter;
+        return matchesStatus && matchesRole;
+      }),
+    [roleFilter, roster, statusFilter],
+  );
+
+  useEffect(() => {
+    if (!filteredAgents.length) {
+      setSelected(null);
+      return;
+    }
+    if (!selected || !filteredAgents.some((agent) => agent.name === selected)) {
+      setSelected(filteredAgents[0].name);
+    }
+  }, [filteredAgents, selected]);
+
+  const positions = [
+    { x: 14, y: 26 },
+    { x: 36, y: 14 },
+    { x: 63, y: 20 },
+    { x: 80, y: 42 },
+    { x: 62, y: 70 },
+    { x: 28, y: 72 },
+  ];
+
+  const nodes = filteredAgents.slice(0, 6).map((agent, index) => ({ ...agent, x: positions[index]?.x ?? 50, y: positions[index]?.y ?? 50 }));
+  const links = [
+    { from: nodes[0]?.name, to: nodes[1]?.name, state: "accepted" as const },
+    { from: nodes[1]?.name, to: nodes[2]?.name, state: "pending" as const },
+    { from: nodes[2]?.name, to: nodes[3]?.name, state: "accepted" as const },
+    { from: nodes[3]?.name, to: nodes[4]?.name, state: "active" as const },
+    { from: nodes[4]?.name, to: nodes[5]?.name, state: "pending" as const },
+    { from: nodes[5]?.name, to: nodes[0]?.name, state: "active" as const },
+  ].filter((link) => link.from && link.to);
+
+  const selectedNode = nodes.find((node) => node.name === selected) ?? nodes[0] ?? null;
+  const recentSelectedEvents = selectedNode
+    ? (events ?? []).filter((event) => event.agent === selectedNode.name).slice(0, 3)
+    : [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-muted-foreground">Status:</span>
+        {(["all", "active", "idle", "silent"] as const).map((option) => (
+          <button
+            type="button"
+            key={option}
+            onClick={() => setStatusFilter(option)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs transition-colors",
+              statusFilter === option ? "border-primary bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-accent",
+            )}
+          >
+            {option === "all" ? "All" : option}
+          </button>
+        ))}
+        <span className="ml-2 text-sm font-medium text-muted-foreground">Role:</span>
+        {["all", ...roles].map((option) => (
+          <button
+            type="button"
+            key={option}
+            onClick={() => setRoleFilter(option)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs transition-colors",
+              roleFilter === option ? "border-primary bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-accent",
+            )}
+          >
+            {option === "all" ? "All roles" : option}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_340px]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Map className="size-4" aria-hidden /> Command map
+            </CardTitle>
+            <CardDescription>Mission topology for the active fleet.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!agents ? (
+              <Skeleton className="h-[520px] w-full" />
+            ) : (
+              <div className="map-surface relative h-[520px] overflow-hidden rounded-xl border bg-[radial-gradient(circle_at_center,_rgba(110,150,255,0.20),_transparent_55%)]">
+                <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full" preserveAspectRatio="xMidYMid meet">
+                  {links.map((link, index) => {
+                    const from = nodes.find((n) => n.name === link.from);
+                    const to = nodes.find((n) => n.name === link.to);
+                    if (!from || !to) return null;
+                    const isPending = link.state === "pending";
+                    const color = link.state === "accepted" ? "#22c55e" : link.state === "pending" ? "#fbbf24" : link.state === "declined" ? "#ef4444" : "#60a5fa";
+                    return (
+                      <path
+                        key={`${link.from}-${link.to}-${index}`}
+                        d={`M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${Math.min(from.y, to.y) - 18} ${to.x} ${to.y}`}
+                        stroke={color}
+                        strokeWidth={isPending ? 1.5 : 2}
+                        strokeDasharray={isPending ? "2,2" : undefined}
+                        fill="none"
+                        className="map-line"
+                      />
+                    );
+                  })}
+                </svg>
+
+                <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-primary/30 bg-background/80 px-4 py-3 shadow-sm backdrop-blur-sm">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Goal</div>
+                  <div className="text-center text-sm font-medium">Bastion control centre</div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="size-2 rounded-full bg-ok" aria-hidden /> 72% on track
+                  </div>
+                </div>
+
+                {nodes.length === 0 ? (
+                  <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">No agents match the current filters.</div>
+                ) : (
+                  nodes.map((node) => (
+                    <button
+                      key={node.name}
+                      type="button"
+                      onClick={() => setSelected(node.name)}
+                      className={cn(
+                        "map-node absolute w-28 -translate-x-1/2 -translate-y-1/2 rounded-xl text-left",
+                        selected === node.name && "ring-2 ring-primary/60",
+                      )}
+                      style={{ left: `${node.x}%`, top: `${node.y}%` }}
+                    >
+                      <div className="rounded-xl border border-border bg-card/90 p-2 shadow-sm backdrop-blur-sm">
+                        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                          <span className="truncate">{node.role}</span>
+                          <span className={cn("size-2.5 rounded-full", STATUS_DOT[node.status])} aria-label={node.status} title={node.status} />
+                        </div>
+                        <div className="mt-1 truncate text-sm font-medium">{node.name}</div>
+                        <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>last seen</span>
+                          <span>{timeAgo(node.last_seen, now)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Map legend</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center gap-2"><span className="h-0.5 w-8 rounded-full bg-emerald-500" /> Solid: active coordination</div>
+              <div className="flex items-center gap-2"><span className="h-0.5 w-8 rounded-full bg-amber-400" style={{ strokeDasharray: "4 4" }} /> Dotted: assistance pending</div>
+              <div className="flex items-center gap-2"><span className="h-0.5 w-8 rounded-full bg-red-500" /> Red: declined / blocked</div>
+              <div className="flex items-center gap-2"><span className="h-0.5 w-8 rounded-full bg-sky-500" /> Blue: owned task dependency</div>
+            </CardContent>
+          </Card>
+
+          {selectedNode && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Selected node</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{selectedNode.name}</span>
+                  <Badge variant="secondary">{selectedNode.role}</Badge>
+                </div>
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Status</span>
+                  <span className="flex items-center gap-2">
+                    <span className={cn("size-2 rounded-full", STATUS_DOT[selectedNode.status])} aria-hidden />
+                    {selectedNode.status}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Runs on</span>
+                  <span>{selectedNode.runs_on}</span>
+                </div>
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Last seen</span>
+                  <span>{timeAgo(selectedNode.last_seen, now)}</span>
+                </div>
+                {recentSelectedEvents.length > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Recent activity</div>
+                    {recentSelectedEvents.map((event) => (
+                      <div key={event.id} className="rounded-md border p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium">{event.kind}</span>
+                          <time className="text-[10px] text-muted-foreground">{timeAgo(event.ts, now)}</time>
+                        </div>
+                        <div className="mt-1 text-muted-foreground">{event.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recent mission events</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!(events ?? []).length ? (
+                <p className="text-sm text-muted-foreground">No recent events.</p>
+              ) : (
+                <ul className="space-y-3 text-sm">
+                  {(events ?? []).slice(0, 4).map((event) => (
+                    <li key={event.id} className="rounded-md border p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium">{event.agent}</span>
+                        <Badge variant="outline" className={cn("font-mono text-[10px]", KIND_STYLE[event.kind] ?? "border-muted text-muted-foreground")}>{event.kind}</Badge>
+                      </div>
+                      <div className="mt-1 text-muted-foreground">{event.summary}</div>
+                      <time className="mt-1 block text-[11px] text-muted-foreground" dateTime={event.ts}>{timeAgo(event.ts, now)}</time>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RosterCard({ agents, now, compact, className }: { agents?: Agent[]; now: Date; compact?: boolean; className?: string }) {
   return (
     <Card className={className}>
       <CardHeader>

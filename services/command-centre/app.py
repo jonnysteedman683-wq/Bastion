@@ -69,6 +69,10 @@ APPROVAL_FIELDS = (
     "updated_ts",
     "detail",
 )
+MAX_REQUEST_BODY_BYTES = 64 * 1024
+MAX_EMAIL_LENGTH = 254
+MAX_STRING_FIELD_LENGTH = 128
+MAX_SUMMARY_LENGTH = 4096
 
 # Only our own origin may load scripts, styles, data or frames. No inline script.
 CSP = (
@@ -816,20 +820,54 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                     self._json(401, {"error": "authentication required"})
                 return None
 
+        def _public_origin(self) -> str:
+            configured = os.environ.get("BASTION_PUBLIC_URL") or os.environ.get("PUBLIC_BASE_URL") or ""
+            if configured:
+                parsed = urllib.parse.urlsplit(configured)
+                if parsed.scheme and parsed.netloc:
+                    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+                return configured.rstrip("/")
+            host = self.headers.get("Host", "").strip()
+            if not host:
+                return ""
+            proto = self.headers.get("X-Forwarded-Proto", "https")
+            return f"{proto}://{host}".rstrip("/")
+
+        def _read_json_body(self, limit: int = MAX_REQUEST_BODY_BYTES) -> dict[str, object] | None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._json(400, {"error": "invalid content-length"})
+                return None
+            if length < 0 or length > limit:
+                self._json(413, {"error": "request too large"})
+                return None
+            raw = self.rfile.read(length) if length else b""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                self._json(400, {"error": "invalid JSON"})
+                return None
+            if not isinstance(payload, dict):
+                self._json(400, {"error": "JSON object required"})
+                return None
+            return payload
+
         def _magic_link(self) -> None:
             if auth is None or not auth.configured:
                 self._json(503, {"error": "authentication unavailable"})
                 return
+            payload = self._read_json_body(16 * 1024)
+            if payload is None:
+                return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                data = json.loads(self.rfile.read(length)) if length else {}
-                email = data.get("email")
-                if not isinstance(email, str) or not email.strip():
+                email = str(payload.get("email", "")).strip()
+                if not email or len(email) > MAX_EMAIL_LENGTH:
                     raise ValueError
-                host = self.headers.get("Host", "")
-                if not host:
+                origin = self._public_origin()
+                if not origin:
                     raise ValueError
-                auth.send_magic_link(email.strip(), f"https://{host}/auth/callback")
+                auth.send_magic_link(email, f"{origin}/auth/callback")
             except (AuthError, ValueError, json.JSONDecodeError):
                 self._json(400, {"error": "unable to send sign-in link"})
                 return
@@ -863,19 +901,19 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
             if agent is None:
                 self._json(401, {"error": "invalid or missing API key"})
                 return
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                data = json.loads(self.rfile.read(length)) if length else {}
-            except (ValueError, json.JSONDecodeError):
-                self._json(400, {"error": "invalid JSON"})
+            payload = self._read_json_body(MAX_REQUEST_BODY_BYTES)
+            if payload is None:
                 return
-            source = str(data.get("source", "unknown"))
-            kind = str(data.get("kind", "event"))
-            summary = str(data.get("summary", ""))
+            source = str(payload.get("source", "unknown")).strip()[:MAX_STRING_FIELD_LENGTH] or "unknown"
+            kind = str(payload.get("kind", "event")).strip()[:MAX_STRING_FIELD_LENGTH] or "event"
+            summary = str(payload.get("summary", "")).strip()[:MAX_SUMMARY_LENGTH]
             if not summary:
                 self._json(400, {"error": "summary required"})
                 return
-            event = ingest_event(source, agent, kind, summary, data.get("ts"))
+            if len(summary) > MAX_SUMMARY_LENGTH:
+                self._json(400, {"error": "summary too long"})
+                return
+            event = ingest_event(source, agent, kind, summary, str(payload.get("ts")) if payload.get("ts") is not None else None)
             self._json(201, {"id": event.id, "ts": event.ts})
 
         def _ledger_call(self, build: Any) -> None:
@@ -977,3 +1015,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

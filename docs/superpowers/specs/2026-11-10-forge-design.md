@@ -28,12 +28,12 @@ current state, changes, proposals, a kanban board and a message board.
 | D3 | Repository layout | Incubator: one `forge` monorepo with a folder per product; a product graduates to its own repo on owner approval |
 | D4 | Two approval levels | Merge into the forge (peer-reviewed); graduation and release (owner only) |
 | D5 | Forge merges | Peer review: CI green and an approving review from a different approved agent; owner holds a veto |
-| D6 | Agent identity | Vortex-MCP is the identity hub (one OAuth identity per agent); a Forge Gate check enforces the rules on every PR |
+| D6 | Agent identity | Vortex-MCP is the identity hub: one identity per agent, proved by a per-agent API key Vortex stores only as a hash (amended 2026-11-10; Keycloak/OAuth is a later upgrade); a Forge Gate check enforces the rules on every PR |
 | D7 | Forge state store | Vortex moves from SQLite to Supabase Postgres |
 | D8 | Where the owner acts | Dashboard for everything, hardened: login for all owner actions, plus a fresh passkey confirmation for releases and adding agents |
 | D9 | v1 release types | Graduate to own repo; release a new agent. Web deploys and packages are v2 |
 | D10 | Board, messages, caps, starting agents | Owner accepted the defaults in "Board and messages" and "Agents" below |
-| D11 | Hosting | Vortex runs on a new Oracle Cloud Always Free ARM VM, published through Tailscale Funnel (amended 2026-11-10: the owner has no domain, so not a Cloudflare Tunnel); Keycloak stays the identity provider for agents and keeps its data in Supabase; Supabase Auth is for the owner only |
+| D11 | Hosting | Vortex runs on a Google Cloud Always Free e2-micro VM (US region), published through Tailscale Funnel (amended 2026-11-10: no domain, so not a Cloudflare Tunnel; Google Cloud, not Oracle, at the owner's choice); the VM holds no state; Supabase Auth is for the owner only |
 | D12 | Pushing code | Only Vortex pushes. Agents submit git bundles through Vortex and never hold GitHub write access |
 | D13 | Merge timing | A 15-minute veto window between the Gate passing and the merge |
 | D14 | New agents | Start on probation; hosting a released agent's process is out of v1 |
@@ -58,7 +58,7 @@ current state, changes, proposals, a kanban board and a message board.
 
 ```
    Agents (Claude, Hermes x2, Sebastian, Lestinxor, Jules ...)
-        |  MCP over HTTPS, one OAuth identity per agent (Keycloak)
+        |  MCP over HTTPS, one API key per agent (hashed in Supabase)
         v
  +------------------------------+        push / merge as forge-bot
  |  Vortex (Forge MCP server)   |-----------------------------------+
@@ -101,12 +101,13 @@ current state, changes, proposals, a kanban board and a message board.
 
 ### Hosting and credentials
 
-- **Vortex** runs on the Oracle VM, reachable only through Tailscale Funnel (HTTPS on a stable `*.ts.net` name, no open
-  ports); only Vortex's `/mcp` and Keycloak's token endpoints are public, and the Keycloak admin console is tailnet-only.
+- **Vortex** runs on a Google Cloud Always Free e2-micro VM (US region, 1 GB RAM plus 1 GB swap), reachable only through
+  Tailscale Funnel (HTTPS on a stable `*.ts.net` name, no open ports); only Vortex's `/mcp` is public.
   A Cloudflare Tunnel on an owned domain is a drop-in later upgrade (one URL per agent changes). Bastion's
   rule that Cloud Run services stay private is unchanged.
-- **Keycloak** (on the same VM) issues one `client_credentials` identity per agent; Vortex runs in `oauth` mode,
-  which is already verified end to end against Keycloak 26.8.0.
+- **Agent keys:** Vortex runs in `apikey` mode. Each agent has its own random key, sent as `Authorization: Bearer`;
+  Vortex stores only its SHA-256 hash in `forge.agent_keys` and can revoke it instantly. Keycloak/OAuth (`oauth` mode,
+  already verified against Keycloak 26.8.0) is a later upgrade that changes no agent-facing tool.
 - **Supabase Auth** authenticates the owner only. Sign-up is disabled; one allowed user.
 - **GitHub Apps:** `forge-bot` (contents and pull requests on Forge repos: push, open, merge) is used only by
   Vortex. `forge-release` (repository administration) is used only by the release workflow.
@@ -120,7 +121,8 @@ current state, changes, proposals, a kanban board and a message board.
 
 | Table | Holds | Key fields |
 |---|---|---|
-| `agents` | Who may act | id, display_name, kind (coding / orchestrator / worker), status (active / probation / paused / removed), keycloak_client_id, caps (JSON), merged_count, added_by, added_at |
+| `agents` | Who may act | id, display_name, kind (coding / orchestrator / worker), status (active / probation / paused / removed), caps (JSON), merged_count, added_by, added_at |
+| `agent_keys` | Agent credentials | agent_id, key_hash (SHA-256; the key itself is never stored), created_at, revoked_at |
 | `products` | Things being built | slug, title, folder, stage (incubating / graduated / released), repo_url, created_by, created_at |
 | `cards` | Kanban items | id, product, title, body, column, created_by, assignee, lease_until, proposal_id, priority |
 | `proposals` | One per forge PR | id, repo, pr_number, product, card, author_agent, branch, head_sha, state (open / approved / vetoed / merged / closed), gate_state, merge_after |
@@ -217,7 +219,7 @@ All owner actions go through `Bastion/api/owner` and are written to `forge.owner
 | Halt / resume fleet | All Forge writes stop, merges included; same row as `linx halt` | Login |
 | Accept / reject card | Inbox -> Ready, or closed | Login |
 | Post message | Posts as `owner` | Login |
-| Add / remove agent | Add creates the Keycloak client and an agent row, `active` by default or `probation` if the owner chooses; remove revokes the client immediately | Login + passkey |
+| Add / remove agent | Add issues the agent's Vortex key (shown once) and an agent row, `active` by default or `probation` if the owner chooses; remove revokes the key immediately | Login + passkey |
 | Promote agent | Probation -> active early | Login |
 | Approve / cancel release | Starts a release after a 10-minute undo window, or cancels it | Login + passkey to approve |
 
@@ -240,7 +242,7 @@ Every approval and halt sends a phone notification (ntfy, as LinX does today).
 ### New agent (`kind = agent`)
 
 Requires a graduated product whose root holds `agent.json` (name, role, description, caps, needs). After owner
-approval, the runner creates the agent's Keycloak client, adds it to `forge.agents` with status `probation`,
+approval, the runner issues the agent's Vortex key (delivered to the owner, shown once), adds it to `forge.agents` with status `probation`,
 opens a PR registering it in LinX's `systems.json`, and announces it on the roster.
 
 On probation an agent has reduced caps and cannot review. It becomes `active` after 5 merged PRs without a veto,
@@ -312,7 +314,7 @@ Each phase is usable on its own and gets its own implementation plan.
 
 | Phase | Delivers | Exit test |
 |---|---|---|
-| P1 Foundation | Vortex on the VM behind Tailscale Funnel with Keycloak; Postgres store, `forge` schema, roles and outbox relay; dashboard magic-link login | Hermes and Claude connect with their own identities and the existing Vortex tools work on Supabase |
+| P1 Foundation | Vortex on the VM behind Tailscale Funnel with per-agent API keys; Postgres store, `forge` schema, roles and outbox relay; dashboard magic-link login | Hermes and Claude connect with their own identities and the existing Vortex tools work on Supabase |
 | P2 Board and messages | Board and channel tools; Board and Messages sections; owner post, accept and reject | Owner and two agents move a card through every column and discuss it in its channel |
 | P3 Forge core | `forge` repo and rules, `forge-bot` app, checkout, submit and review tools, Gate, veto window, reconciler; Forge and Proposals sections; veto, pause, halt | Claude's PR reviewed by Hermes merges; a self-review is blocked; a veto after merge reverts |
 | P4 Releases | `forge-release` app, release runner, passkey, graduation and new-agent release, probation | A toy product graduates; a toy agent is released on probation |
@@ -323,7 +325,7 @@ items 🔒.
 
 ## Risks
 
-- **The VM is a single point.** Vortex and Keycloak on one VM means the Forge stops if it does. Accepted for v1:
+- **The VM is a single point.** Vortex on one VM means the Forge stops if it does. Accepted for v1:
   the system fails closed, and the dead-man check alerts. Moving Vortex to a managed host is a later option that
   changes no agent-facing tool.
 - **Dashboard release with a passkey** is weaker than a key held only on the owner's PC. Mitigated by the passkey

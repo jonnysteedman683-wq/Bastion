@@ -2,140 +2,171 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A fresh Oracle Cloud Always Free ARM VM, built from one pasted cloud-init file plus one setup command, serves
-Vortex (on Supabase, from P1a) and Keycloak publicly over Tailscale Funnel, so Claude and Hermes each connect with
-their own identity.
+> **Revised 2026-11-10:** Google Cloud e2-micro instead of Oracle, and per-agent Vortex API keys instead of Keycloak
+> (owner's choice; spec D6 and D11 amended to match).
 
-**Architecture:** Everything lives in `Bastion/deploy/forge-vm/`. Cloud-init installs Docker, Tailscale and `uv`,
-creates an unprivileged `forge` user, and checks out Vortex-MCP at a pinned commit. The owner then runs
-`forge-setup.sh` once on the VM: it joins the tailnet, writes secrets to a root-only env file, starts Keycloak (Docker,
-data in a Supabase `keycloak` schema) and Vortex plus its relay (systemd), and publishes exactly two paths through
-Funnel. **The VM holds no state**: rebuilding it is "create a VM, paste the file, run the script".
+**Goal:** A Google Cloud Always Free e2-micro VM, built from one pasted cloud-init file plus one setup command, serves
+Vortex (on Supabase, from P1a) over Tailscale Funnel, and every agent connects with its own revocable API key.
 
-**Tech Stack:** Ubuntu 24.04 aarch64, cloud-init, Docker Engine, `quay.io/keycloak/keycloak:26.8.0`, Tailscale
-(Funnel), `uv`, systemd, Vortex-MCP (P1a), Supabase Postgres. Tests: Python standard library only (Bastion rule).
+**Architecture:** Vortex-MCP gains an `apikey` auth mode: agents send `Authorization: Bearer <key>`; Vortex hashes it
+and looks it up in `forge.agent_keys`, so keys live in Supabase and can be issued or revoked without touching the VM.
+The VM bundle lives in Bastion `deploy/forge-vm/`: cloud-init installs Tailscale and `uv`, adds 1 GB of swap, creates an
+unprivileged `forge` user and checks out Vortex-MCP at a pinned commit; `forge-setup.sh` writes secrets to a root-only
+env file, starts Vortex and its relay under systemd, and publishes `/mcp` through Funnel. **The VM holds no state.**
 
-**Spec:** `docs/superpowers/specs/2026-11-10-forge-design.md` (phase P1; D11 as amended 2026-11-10: Tailscale Funnel,
-not a Cloudflare Tunnel; "Hosting and credentials").
+**Tech Stack:** Python 3.11+, Vortex-MCP (P1a), `mcp` token verifier API, Supabase Postgres; Ubuntu 24.04 LTS (x86_64)
+on e2-micro, cloud-init, Tailscale (Funnel), `uv`, systemd. Bastion tests: standard library only.
 
-**Repos:** files in Bastion `deploy/forge-vm/` (not guarded; `infra/` is). Vortex-MCP is consumed unchanged.
+**Spec:** `docs/superpowers/specs/2026-11-10-forge-design.md` (phase P1; D6 and D11 as amended; "Hosting and
+credentials"; data model `agent_keys`).
+
+**Repos:** Task 1 in `jonnysteedman683-wq/Vortex-MCP`; Tasks 2–3 in Bastion `deploy/forge-vm/` and `docs/` (not guarded;
+`infra/` is). Task 4 is run live with the owner.
 
 ## Global Constraints
 
-- No secret, token, password or connection string is ever committed; templates hold variable **names** only.
-- Secrets on the VM live only in `/etc/forge/forge.env`, mode `0600`, owner `root`; services read it via
-  `EnvironmentFile=`. Nothing echoes them.
-- Vortex and the relay run as user `forge` (no sudo); Keycloak runs in Docker bound to `127.0.0.1` only.
-- Public through Funnel: **only** `/mcp` (Vortex) and `/auth/realms/forge/` (Keycloak token endpoints). The Keycloak
-  admin console is reachable only inside the tailnet.
-- The VM opens no inbound ports except SSH during first setup; the runbook closes SSH to the internet afterwards.
-- Pinned versions: Keycloak `26.8.0`; Vortex-MCP at the P1a merge commit, recorded in `forge.env.example` as
-  `VORTEX_REF`.
-- Agent IDs: `claude-1`, `hermes-1`, `hermes-2`, `sebastian-1`, `lestinxor-1`, `jules-1`; OAuth client IDs equal agent
-  IDs; plus `vortex-introspection`.
-- Supabase connections use the direct or session-mode connection string (P1a requirement), never the
-  transaction-mode pooler.
+- No secret, key, token, password or connection string is ever committed, logged, or put in an error or `repr`.
+  Templates hold variable **names** only.
+- API keys are `vtx_` + 43 URL-safe characters (32 random bytes from `secrets.token_urlsafe(32)`); only
+  `sha256(key)` hex is stored; a key is printed exactly once, when issued.
+- Revocation takes effect on the next request (no caching of positive lookups longer than 30 seconds).
+- On the VM, secrets live only in `/etc/forge/forge.env`, mode `0600`, owner `root`, read via `EnvironmentFile=`.
+- Vortex and the relay run as user `forge` (no sudo); Vortex binds `127.0.0.1:8000`; only `/mcp` is published.
+- Free-tier limits: one e2-micro in `us-west1`, `us-central1` or `us-east1`; 30 GB standard persistent disk; about
+  1 GB/month of free egress, which agent traffic stays well inside.
+- Agent IDs: `claude-1`, `hermes-1`, `hermes-2`, `sebastian-1`, `lestinxor-1`, `jules-1`.
+- Supabase connections use the direct or session-mode connection string (P1a requirement).
+- Pinned: Vortex-MCP at the P1a merge commit (`VORTEX_REF` in `forge.env.example`).
 
 ## Review Focus
 
-1. **Re-running `forge-setup.sh`** on a working VM must change nothing and break nothing (idempotent), including not
-   regenerating client secrets agents already hold. Test in Task 1 (dry-run mode).
-2. **A secret typed at the prompt** must never appear in shell history, logs, `ps`, or the Funnel config. Test in
-   Task 1 (static checks) and Task 3 (on the VM).
-3. **The Keycloak admin console** must not be reachable from the public internet. Checked in Task 3.
-4. **The VM reboots** (Oracle maintenance): everything comes back without the owner. Checked in Task 3.
-5. **Oracle "out of capacity"** when creating the instance: the runbook gives the retry and region fallback. Task 2.
+1. **A revoked key** must stop working within 30 seconds, including for an agent mid-session. Test in Task 1.
+2. **A key that looks valid but is not** (wrong prefix, truncated, another agent's key with one character changed,
+   empty, very long) is refused without a database error and without timing differences worth exploiting
+   (hash-then-lookup, never compare raw keys). Test in Task 1.
+3. **Re-running `forge-setup.sh`** changes nothing on a working VM. Test in Task 2 (dry-run) and Task 4.
+4. **The VM runs out of memory** (1 GB): swap is on, and systemd restarts Vortex if it is killed. Checked in Task 4.
+5. **A reboot** (Google maintenance) brings everything back without the owner. Checked in Task 4.
 
 ---
 
-### Task 1: The `deploy/forge-vm/` bundle and its static tests
+### Task 1: Vortex `apikey` auth mode and key management (Vortex-MCP)
 
 **Files:**
-- Create: `deploy/forge-vm/cloud-init.yaml`, `deploy/forge-vm/forge-setup.sh`, `deploy/forge-vm/forge-check.sh`,
-  `deploy/forge-vm/compose.yaml`, `deploy/forge-vm/vortex.service`, `deploy/forge-vm/vortex-relay.service`,
-  `deploy/forge-vm/realm-forge.json`, `deploy/forge-vm/forge.env.example`, `deploy/forge-vm/README.md`
+- Modify: `vortex/schema/sqlite.sql`, `vortex/schema/postgres.sql` (add `agent_keys`)
+- Modify: `vortex/store.py` (key methods), `vortex/settings.py` (mode `apikey`), `vortex/server.py` (verifier wiring),
+  `vortex/__main__.py` (`keys` subcommand), `README.md` (auth modes table)
+- Create: `vortex/keys.py`
+- Test: `tests/test_keys.py` (both backends), `tests/test_settings.py`, `tests/test_server_auth.py`
+
+**Interfaces:**
+- Produces:
+  - Table `agent_keys(key_hash TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(agent_id), created_at TEXT
+    NOT NULL, revoked_at TEXT)` (Postgres columns `COLLATE "C"`), index on `agent_id`.
+  - `VortexStore.issue_key(agent_id: str) -> str`: raises `ValueError` for an unknown agent; inserts the hash; returns
+    the plaintext key (the only time it exists). An agent may hold several active keys (for rotation).
+  - `VortexStore.revoke_keys(agent_id: str) -> int`: sets `revoked_at` on all active keys; returns how many.
+  - `VortexStore.agent_for_key(key: str) -> str | None`: hashes and looks up an active key.
+  - `VortexStore.list_keys() -> list[dict]`: `agent_id, created_at, revoked_at` and the first 8 hex of the hash; never
+    the hash in full.
+  - `class ApiKeyTokenVerifier(TokenVerifier)` in `vortex/keys.py`: `__init__(store, *, ttl: float = 30.0, clock=
+    time.monotonic)`; `verify_token(token)` returns an `AccessToken` with `client_id=subject=agent_id` and the scopes
+    `vortex:connect`, `vortex:read`, `vortex:message`, or `None`. Caches positive lookups for at most `ttl` seconds;
+    rejects anything not matching `^vtx_[A-Za-z0-9_-]{43}$` before touching the store.
+  - Settings: `VORTEX_AUTH_MODE=apikey` requires `VORTEX_PUBLIC_URL` (https), `VORTEX_ALLOWED_HOSTS`,
+    `VORTEX_ALLOWED_ORIGINS` and a Postgres `VORTEX_STORE_URL`; no per-agent tokens or OAuth settings.
+  - Server: in `apikey` mode, `issuer_url = resource base = VORTEX_PUBLIC_URL`, verifier `ApiKeyTokenVerifier(store)`,
+    transport security as in `oauth` mode.
+  - CLI: `python -m vortex keys add <agent>` (prints the key once, with a "store this now" line),
+    `keys revoke <agent>`, `keys list`; all read `VORTEX_STORE_URL` and `VORTEX_SCHEMA`.
+
+- [ ] **Step 1: Write the failing tests:** `test_issue_and_verify_round_trip`; `test_unknown_agent_cannot_get_key`;
+  `test_revoked_key_stops_within_ttl` (fake clock: valid before revoke, still cached until `ttl`, refused after);
+  `test_malformed_keys_never_reach_the_store` (empty, wrong prefix, 42 and 44 chars, 10 kB string, NUL; the store's
+  lookup is never called); `test_near_miss_key_is_refused` (another agent's key with one character changed);
+  `test_list_keys_hides_hashes`; `test_key_not_in_logs` (issue a key with logging captured; the key is absent);
+  settings tests for `apikey` (requires https public URL and Postgres store; rejects SQLite); a server test that
+  `create_server` in `apikey` mode uses `ApiKeyTokenVerifier` and the public URL.
+- [ ] **Step 2: Run** on both backends. Expected: FAIL.
+- [ ] **Step 3: Implement** to the interfaces above.
+- [ ] **Step 4: Run** both suites and `ruff`. Expected: PASS, with the counts recorded.
+- [ ] **Step 5: Commit** `feat(auth): per-agent API keys stored as hashes (apikey mode)`; push; open the PR.
+
+### Task 2: The `deploy/forge-vm/` bundle and its static tests (Bastion)
+
+**Files:**
+- Create: `deploy/forge-vm/cloud-init.yaml`, `forge-setup.sh`, `forge-check.sh`, `vortex.service`,
+  `vortex-relay.service`, `forge.env.example`, `README.md` (all under `deploy/forge-vm/`)
 - Test: `tests/test_forge_vm.py`
 
 **Interfaces:**
 - Produces:
-  - `forge.env.example`: one `NAME=` per line, no values except non-secret pins (`VORTEX_REF`, `KEYCLOAK_IMAGE`,
-    `VORTEX_SCHEMA=forge`, `FORGE_HOSTNAME=` left blank). Names: `TS_AUTHKEY`, `VORTEX_STORE_URL`,
-    `KC_DB_URL`, `KC_DB_USERNAME`, `KC_DB_PASSWORD`, `KC_BOOTSTRAP_ADMIN_USERNAME`, `KC_BOOTSTRAP_ADMIN_PASSWORD`,
-    `VORTEX_OAUTH_CLIENT_SECRET`, `UNISYNC_GATEWAY_URL`, `UNISYNC_VORTEX_TOKEN`.
-  - `forge-setup.sh [--dry-run]`: idempotent; prompts (with `read -s`) only for values missing from
-    `/etc/forge/forge.env`; never prints a secret; in `--dry-run` prints the actions it would take and exits 0 without
-    touching the system.
-  - Funnel layout (in `forge-setup.sh`): `tailscale funnel --bg --set-path /mcp http://127.0.0.1:8000/mcp` and
-    `tailscale funnel --bg --set-path /auth/realms/forge http://127.0.0.1:8080/auth/realms/forge`; admin console via
-    `tailscale serve --bg --https=8443 http://127.0.0.1:8080` (tailnet only). Exact flags are checked against
-    `tailscale funnel --help` on the VM in Task 3.
-  - `realm-forge.json`: realm `forge`, confidential `client_credentials` clients for the seven IDs above, no secrets
-    in the file (Keycloak generates them on import); service accounts enabled; standard flow disabled.
-  - `forge-check.sh`: prints PASS/FAIL lines for the checks in Task 3 and exits non-zero on any FAIL.
+  - `cloud-init.yaml`: packages and Tailscale's apt repo; a 1 GB `/swapfile` in `/etc/fstab`; user `forge`; `uv`
+    installed for `forge`; Vortex-MCP cloned to `/opt/forge/vortex` at `VORTEX_REF` with `uv sync --extra unisync`;
+    bundle files copied to `/opt/forge/`; units installed but **not** started.
+  - `forge.env.example`: one `NAME=` per line. Secret names: `TS_AUTHKEY`, `VORTEX_STORE_URL`, `UNISYNC_GATEWAY_URL`,
+    `UNISYNC_VORTEX_TOKEN`. Non-secret pins: `VORTEX_REF`, `VORTEX_SCHEMA=forge`, `VORTEX_AUTH_MODE=apikey`,
+    `VORTEX_AGENT_IDS=` (the six IDs), `VORTEX_HOST=127.0.0.1`, `VORTEX_PORT=8000`. `VORTEX_PUBLIC_URL`,
+    `VORTEX_ALLOWED_HOSTS` and `VORTEX_ALLOWED_ORIGINS` are derived by `forge-setup.sh` from the Funnel name.
+  - `forge-setup.sh [--dry-run]`: idempotent; prompts with `read -s` only for values missing from
+    `/etc/forge/forge.env`; runs `tailscale up --authkey`, then `tailscale funnel --bg --set-path /mcp
+    http://127.0.0.1:8000/mcp` (exact flags confirmed against `tailscale funnel --help` in Task 4); writes the derived
+    URLs; enables and starts both units; never prints a secret. `--dry-run` with `FORGE_ROOT=<dir>` prints planned
+    actions and changes nothing.
+  - Units: `User=forge`, `EnvironmentFile=/etc/forge/forge.env`, `Restart=always`, `RestartSec=5`,
+    `MemoryMax=600M` (Vortex) and `MemoryMax=200M` (relay), `NoNewPrivileges=yes`, `ProtectSystem=strict`.
+  - `forge-check.sh`: PASS/FAIL lines for the Task 4 checks; exit non-zero on any FAIL.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_forge_vm.py` (standard library only):
-  `test_bundle_files_exist`; `test_env_example_has_names_not_secret_values` (every line is `NAME=` or a pinned
-  non-secret key from the list above); `test_no_credential_shaped_strings` (no `://user:pass@`, no `password=` with a
-  value, no `tskey-`, no `sb_secret`, in any bundle file); `test_realm_clients_match_agent_ids` (parsed JSON client IDs
-  == the seven IDs; no `secret` keys); `test_keycloak_image_is_pinned` (`compose.yaml` names exactly
-  `quay.io/keycloak/keycloak:26.8.0` and binds `127.0.0.1:8080`); `test_services_run_as_forge_user` (both units have
-  `User=forge`, `EnvironmentFile=/etc/forge/forge.env`, `Restart=always`); `test_only_two_public_paths` (the
-  `tailscale funnel` lines in `forge-setup.sh` publish exactly `/mcp` and `/auth/realms/forge`);
-  `test_scripts_parse` (`bash -n` on both scripts); `test_setup_dry_run_touches_nothing` (run
-  `forge-setup.sh --dry-run` with `FORGE_ROOT` pointed at a temp dir: exit 0, temp dir unchanged).
+- [ ] **Step 1: Write the failing tests** (standard library only): `test_bundle_files_exist`;
+  `test_env_example_has_names_not_values`; `test_no_credential_shaped_strings` (no `://user:pass@`, no assignment of a
+  value to a secret name, no `tskey-`, no `vtx_` followed by key characters, in any bundle file);
+  `test_services_are_hardened` (the unit settings listed above); `test_only_mcp_is_published` (the only
+  `tailscale funnel` path is `/mcp`); `test_swap_is_configured`; `test_scripts_parse` (`bash -n`);
+  `test_setup_dry_run_touches_nothing`.
 - [ ] **Step 2: Run** `python -m unittest tests.test_forge_vm -v`. Expected: FAIL (files missing).
-- [ ] **Step 3: Write the bundle** to satisfy the interfaces above.
-- [ ] **Step 4: Run** the three repo checks from `AGENTS.md`. Expected: all pass.
-- [ ] **Step 5: Commit** `feat(deploy): Forge VM bundle (cloud-init, setup, Keycloak, Vortex, Funnel)`.
+- [ ] **Step 3: Write the bundle.**
+- [ ] **Step 4: Run** the three repo checks in `AGENTS.md`. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(deploy): Forge VM bundle for a Google Cloud e2-micro`.
 
-### Task 2: Owner runbook `docs/FORGE_VM.md`
+### Task 3: Owner runbook `docs/FORGE_VM.md` (Bastion)
 
-**Files:**
-- Create: `docs/FORGE_VM.md`; Modify: `README.md` (one row in "What's here")
-- Test: `tests/test_forge_vm.py` (`test_runbook_covers_every_owner_step`)
+**Files:** Create `docs/FORGE_VM.md`; modify `README.md` (one row in "What's here"). Test:
+`tests/test_forge_vm.py::test_runbook_covers_every_owner_step`.
 
-**Interfaces:**
-- Produces a numbered runbook, each step with "you'll see" so the owner knows it worked:
-  1. Tailscale: create account (free), enable MagicDNS, HTTPS certificates and Funnel; create a one-off, pre-approved
-     auth key tagged `tag:forge`.
-  2. Supabase: run `python -m vortex migrate` once from your PC with the admin connection; create login role
-     `vortex_app` (member of `vortex_writer`) and role `keycloak_owner` owning schema `keycloak`, each with its own
-     generated password; confirm the `vortex` ledger token allows `memory.write`.
-  3. Oracle Cloud: create an Always Free account; create instance (Ubuntu 24.04, shape `VM.Standard.A1.Flex`, 2 OCPU,
-     12 GB); paste `cloud-init.yaml` under Advanced → Initialization script; add your SSH key. If "out of host
-     capacity": retry, switch availability domain, or try another home-region-compatible option.
-  4. On the VM: `sudo /opt/forge/forge-setup.sh`, answer the prompts.
-  5. Close SSH to the internet in the Oracle security list (use `tailscale ssh` from then on).
-  6. Collect each agent's client secret from the tailnet-only Keycloak admin console and give each agent only its own.
-- `test_runbook_covers_every_owner_step`: the runbook contains each of the headings above and no secret values.
+The runbook is numbered, and every step ends with "you'll see …":
+1. **Tailscale:** free account; enable MagicDNS, HTTPS certificates and Funnel; create a one-off pre-approved auth key.
+2. **Supabase:** from your PC run `python -m vortex migrate` with the admin connection; create login role `vortex_app`
+   as a member of `vortex_writer`; confirm the `vortex` ledger token allows `memory.write`.
+3. **Agent keys:** from your PC, `python -m vortex keys add <agent>` for each of the six agents; store each key in that
+   agent's own secret store, never in chat or a repo.
+4. **Google Cloud:** Compute Engine → Create instance: `e2-micro`, region `us-central1` (or `us-west1` / `us-east1`),
+   Ubuntu 24.04 LTS x86_64, 30 GB standard persistent disk, no external HTTP/HTTPS firewall rules; under Advanced →
+   Management → Metadata add key `user-data` with the contents of `cloud-init.yaml`. Note the free-tier limits.
+5. **On the VM** (SSH from the console): `sudo /opt/forge/forge-setup.sh`, answer the prompts.
+6. **Close public SSH:** remove the default SSH firewall rule; use `tailscale ssh` from then on.
 
-- [ ] **Step 1: Write the failing test.** **Step 2: Run** it. Expected: FAIL.
+- [ ] **Step 1: Write the failing test** (each heading present; no secret values). **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Write the runbook.** **Step 4: Run** the repo checks. Expected: PASS.
 - [ ] **Step 5: Commit** `docs(deploy): Forge VM runbook`.
 
-### Task 3: 🔒 Build the VM and verify (owner and Claude together)
+### Task 4: 🔒 Build the VM and verify (owner and Claude together)
 
-Owner-run steps; Claude walks through them live and reads the output.
-
-- [ ] **Step 1:** Owner follows `docs/FORGE_VM.md` steps 1–4.
-- [ ] **Step 2:** On the VM, `sudo /opt/forge/forge-check.sh`. Expected, all PASS:
-  `keycloak healthy`; `vortex healthy`; `relay running`; `token claude-1`; `token hermes-1`;
-  `vortex round trip (claude-1 -> hermes-1)`; `outbox relayed to ledger`; `second vortex refused`;
-  `admin console not public` (from outside the tailnet `https://<host>/auth/admin/` is not served);
-  `no secrets in journal` (`journalctl -u vortex -u vortex-relay` contains no value from `/etc/forge/forge.env`).
-- [ ] **Step 3:** `sudo reboot`; after 3 minutes rerun `forge-check.sh`. Expected: all PASS.
-- [ ] **Step 4:** Rerun `sudo /opt/forge/forge-setup.sh`. Expected: no prompts, "nothing to change", check still
-  passes, client secrets unchanged.
-- [ ] **Step 5:** Owner closes public SSH (runbook step 5) and hands out client secrets (step 6). Claude records the
-  result in `docs/BACKLOG.md` (new item P1b ticked) and the PR body.
+- [ ] **Step 1:** Owner follows runbook steps 1–5; Claude reads the output at each step.
+- [ ] **Step 2:** `sudo /opt/forge/forge-check.sh`. Expected, all PASS: `vortex healthy`; `relay running`;
+  `funnel publishes only /mcp`; `claude-1 key accepted`; `hermes-1 key accepted`; `round trip claude-1 -> hermes-1`;
+  `outbox relayed to ledger`; `second vortex refused`; `revoked key refused within 30 s` (issue and revoke a throwaway
+  key); `no secrets in journal`; `swap active`.
+- [ ] **Step 3:** `sudo reboot`; after 3 minutes rerun the check. Expected: all PASS.
+- [ ] **Step 4:** Rerun `sudo /opt/forge/forge-setup.sh`. Expected: no prompts, "nothing to change", check still passes.
+- [ ] **Step 5:** Owner closes public SSH (runbook step 6). Claude ticks P1b in `docs/BACKLOG.md` with the check output.
 
 ## Done when (P1b exit)
 
-Claude and Hermes each obtain a token with their own client credentials and complete a Vortex message round trip
-against the Supabase-backed store over `https://<forge-host>.ts.net/mcp`; the relay writes those events to the ledger;
-the VM survives a reboot and a re-run of setup unchanged.
+Claude and Hermes each complete a Vortex message round trip with their own API keys against the Supabase-backed store
+at `https://<forge-host>.ts.net/mcp`; the relay writes those events to the ledger; a revoked key stops working within
+30 seconds; the VM survives a reboot and a re-run of setup unchanged.
 
 ## Out of scope
 
-Dashboard login (P1c); moving to an owned domain with a Cloudflare Tunnel (a later one-URL change per agent); hosting
-any agent other than Vortex on the VM.
+Dashboard login (P1c); Keycloak/OAuth (later upgrade); an owned domain with a Cloudflare Tunnel (later upgrade: one URL
+per agent changes); hosting any agent other than Vortex on the VM.

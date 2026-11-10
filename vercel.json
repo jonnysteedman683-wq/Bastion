@@ -4,7 +4,7 @@
   "buildCommand": "cp -R public dist",
   "outputDirectory": "dist",
   "functions": {
-    "api/data.py": { "maxDuration": 15 }
+    "api/data.py": { "maxDuration": 15, "includeFiles": "api/supabase-ca.crt" }
   },
   "headers": [
     {

@@ -15,6 +15,7 @@ import ssl
 import urllib.parse
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any
 
 QUERIES: dict[str, str] = {
@@ -46,6 +47,18 @@ QUERIES: dict[str, str] = {
 }
 
 
+# Supabase signs its Postgres and pooler certificates with its own root, which is not in the public
+# trust store. Public certificate (not a secret), from Supabase's dashboard download; valid to 2031-04-26.
+SUPABASE_CA = Path(__file__).with_name("supabase-ca.crt")
+
+
+def ssl_context() -> ssl.SSLContext:
+    """Full verification (certificate and hostname) against the public store plus the Supabase root."""
+    ctx = ssl.create_default_context()
+    ctx.load_verify_locations(cafile=str(SUPABASE_CA))
+    return ctx
+
+
 def connect_from_dsn(dsn: str, timeout: float = 8.0) -> Any:
     """A pg8000 connection for a postgresql:// DSN, over TLS."""
     import pg8000.native  # type: ignore[import-not-found]  # installed by Vercel from requirements.txt
@@ -59,7 +72,7 @@ def connect_from_dsn(dsn: str, timeout: float = 8.0) -> Any:
         host=parts.hostname,
         port=parts.port or 5432,
         database=parts.path.lstrip("/") or "postgres",
-        ssl_context=ssl.create_default_context(),
+        ssl_context=ssl_context(),
         timeout=timeout,
     )
 

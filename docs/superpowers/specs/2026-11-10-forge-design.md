@@ -33,7 +33,7 @@ current state, changes, proposals, a kanban board and a message board.
 | D8 | Where the owner acts | Dashboard for everything, hardened: login for all owner actions, plus a fresh passkey confirmation for releases and adding agents |
 | D9 | v1 release types | Graduate to own repo; release a new agent. Web deploys and packages are v2 |
 | D10 | Board, messages, caps, starting agents | Owner accepted the defaults in "Board and messages" and "Agents" below |
-| D11 | Hosting | Vortex runs on the owner's Oracle VM behind a Cloudflare Tunnel; Keycloak stays the identity provider for agents; Supabase Auth is for the owner only |
+| D11 | Hosting | Vortex runs on a new Oracle Cloud Always Free ARM VM, published through Tailscale Funnel (amended 2026-11-10: the owner has no domain, so not a Cloudflare Tunnel); Keycloak stays the identity provider for agents and keeps its data in Supabase; Supabase Auth is for the owner only |
 | D12 | Pushing code | Only Vortex pushes. Agents submit git bundles through Vortex and never hold GitHub write access |
 | D13 | Merge timing | A 15-minute veto window between the Gate passing and the merge |
 | D14 | New agents | Start on probation; hosting a released agent's process is out of v1 |
@@ -101,7 +101,9 @@ current state, changes, proposals, a kanban board and a message board.
 
 ### Hosting and credentials
 
-- **Vortex** runs on the Oracle VM, reachable only through a Cloudflare Tunnel (HTTPS, no open ports). Bastion's
+- **Vortex** runs on the Oracle VM, reachable only through Tailscale Funnel (HTTPS on a stable `*.ts.net` name, no open
+  ports); only Vortex's `/mcp` and Keycloak's token endpoints are public, and the Keycloak admin console is tailnet-only.
+  A Cloudflare Tunnel on an owned domain is a drop-in later upgrade (one URL per agent changes). Bastion's
   rule that Cloud Run services stay private is unchanged.
 - **Keycloak** (on the same VM) issues one `client_credentials` identity per agent; Vortex runs in `oauth` mode,
   which is already verified end to end against Keycloak 26.8.0.
@@ -310,7 +312,7 @@ Each phase is usable on its own and gets its own implementation plan.
 
 | Phase | Delivers | Exit test |
 |---|---|---|
-| P1 Foundation | Vortex on the VM behind a Cloudflare Tunnel with Keycloak; Postgres store, `forge` schema, roles and outbox relay; dashboard magic-link login | Hermes and Claude connect with their own identities and the existing Vortex tools work on Supabase |
+| P1 Foundation | Vortex on the VM behind Tailscale Funnel with Keycloak; Postgres store, `forge` schema, roles and outbox relay; dashboard magic-link login | Hermes and Claude connect with their own identities and the existing Vortex tools work on Supabase |
 | P2 Board and messages | Board and channel tools; Board and Messages sections; owner post, accept and reject | Owner and two agents move a card through every column and discuss it in its channel |
 | P3 Forge core | `forge` repo and rules, `forge-bot` app, checkout, submit and review tools, Gate, veto window, reconciler; Forge and Proposals sections; veto, pause, halt | Claude's PR reviewed by Hermes merges; a self-review is blocked; a veto after merge reverts |
 | P4 Releases | `forge-release` app, release runner, passkey, graduation and new-agent release, probation | A toy product graduates; a toy agent is released on probation |

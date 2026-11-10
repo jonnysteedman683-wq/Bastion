@@ -65,6 +65,28 @@ Set it up on the machine that runs Hermes:
 3. Start Hermes once and approve the hooks when it asks. `hermes hooks list` shows whether they are
    approved; `hermes hooks test on_session_start` fires one without starting a session.
 
+## A command centre on your own machine
+
+Agents on a PC can report to a command centre running on the same PC:
+
+```bash
+python -m tools.local
+```
+
+It serves `http://localhost:8080` to this machine only and prints a one-time sign-in link (a fresh secret on
+every start), so no Supabase setup is needed to look at it. With `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` set it uses the normal magic-link sign-in instead.
+
+Put the agents' keys in `.env.local` in the repository root (git-ignored), never in a tracked file:
+
+```text
+INGEST_AGENT_KEYS={"Hermes":"<Hermes's key>"}
+```
+
+Reported events are kept in `~/.bastion/ingest.db`. Build the web app once first
+(`cd services/command-centre/web && npm ci && npm run build`). This is for the owner's own machine: it is
+not a way to deploy, and it never listens on anything but `127.0.0.1`.
+
 ## Check it
 
 Run the agent once. It should show as **active** on the roster and its events should be in the feed within

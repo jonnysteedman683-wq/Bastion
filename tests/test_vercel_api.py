@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import unittest
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,30 @@ class QueriesTest(unittest.TestCase):
 
     def test_output_is_json_safe(self) -> None:
         json.dumps(data.load(lambda: FakeConn()), default=str)
+
+
+class LedgerTlsTest(unittest.TestCase):
+    """Supabase signs its Postgres certificates with its own root, not a public CA."""
+
+    def test_context_trusts_the_bundled_supabase_root(self) -> None:
+        self.assertIn("Supabase Root 2021 CA", common_names(data.ssl_context()))
+
+    def test_context_still_verifies_certificate_and_hostname(self) -> None:
+        ctx = data.ssl_context()
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+    def test_connection_uses_the_supabase_context(self) -> None:
+        native = mock.MagicMock()
+        with mock.patch.dict("sys.modules", {"pg8000": mock.MagicMock(native=native), "pg8000.native": native}):
+            data.connect_from_dsn("postgresql://reader@db.example.com:5432/postgres")
+        kwargs = native.Connection.call_args.kwargs
+        self.assertEqual((kwargs["user"], kwargs["host"]), ("reader", "db.example.com"))
+        self.assertIn("Supabase Root 2021 CA", common_names(kwargs["ssl_context"]))
+
+
+def common_names(ctx: ssl.SSLContext) -> list[str | None]:
+    return [dict(x[0] for x in c["subject"]).get("commonName") for c in ctx.get_ca_certs()]
 
 
 if __name__ == "__main__":

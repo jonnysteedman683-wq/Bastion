@@ -21,6 +21,12 @@ class VercelConfigTests(unittest.TestCase):
             (ROOT / "requirements.txt").read_text(encoding="utf-8"),
         )
 
+    def test_function_bundle_includes_the_ledger_ca(self) -> None:
+        config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+
+        self.assertTrue((ROOT / "api" / "supabase-ca.crt").is_file())
+        self.assertEqual(config["functions"]["api/data.py"].get("includeFiles"), "api/supabase-ca.crt")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,13 +33,16 @@ command is offered only for plain ids (`[A-Za-z0-9][A-Za-z0-9._:-]{0,79}`); anyt
 Agents report usage by adding a `usage` object to any ledger event, normally `task.result` or `task.failed`:
 
 ```json
-"usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.0123}
+"usage": {"model": "claude-...", "input_tokens": 1234, "output_tokens": 567, "cost_micro_usd": 12300}
 ```
 
-Every field is optional. `bastion.spend_daily` (`ledger/bastion_spend.sql`, apply after `bastion_reader.sql`) sums them
+Every field is optional. Cost is in integer micro-dollars, because the UniSync gateway rejects non-integer numbers
+anywhere in an envelope. A summoned agent writes a usage file (with `cost_usd` as a plain number), and
+`python -m tools.summon finish ... --usage FILE` cleans it up, converts the cost and attaches it to the outcome. A bad
+file is a warning; the outcome still posts. A `cost_usd` number written straight to Supabase is still counted. `bastion.spend_daily` (`ledger/bastion_spend.sql`, apply after `bastion_reader.sql`) sums them
 per agent per UTC day. Agents write these bodies, so the view counts a field only when it is a JSON number, treats
 negatives as 0 and clamps outliers. The Spend view shows today, 7 and 30 days, a 30-day chart and each agent's spend
-today against `caps.json`. Until agents report usage (backlog G1b) the view says so instead of showing zeros as fact.
+today against `caps.json`. Until an agent reports usage the view says so instead of showing zeros as fact.
 
 ## Kill switch
 

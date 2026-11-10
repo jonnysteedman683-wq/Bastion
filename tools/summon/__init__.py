@@ -12,7 +12,13 @@ Run from the summon workflow:
 
     python -m tools.summon request --title T --agent sebastian --run-url URL   # prints the task id
     python -m tools.summon claim   --task-id ID --agent sebastian
-    python -m tools.summon finish  --task-id ID --agent sebastian --exit-code N --log FILE --run-url URL
+    python -m tools.summon finish  --task-id ID --agent sebastian --exit-code N --log FILE --run-url URL \
+                                   [--usage USAGE.json]
+
+``--usage`` attaches the agent's token and cost report to the outcome (backlog G1b), in the Spend view's
+contract (``services/command-centre/ledger/bastion_spend.sql``). The gateway refuses non-integer numbers anywhere
+in an envelope, so ``cost_usd`` from the file is sent as integer ``cost_micro_usd``. A bad usage file is a warning,
+never a reason to lose the outcome.
 
 Environment: ``UNISYNC_GATEWAY_URL`` (not secret), ``UNISYNC_ORCHESTRATOR_TOKEN`` and
 ``UNISYNC_AGENT_TOKEN`` (GitHub secrets; only their sha256 is stored in the ledger).
@@ -22,6 +28,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import math
 import os
 import re
 import sys
@@ -39,6 +47,10 @@ MAX_OUTPUT_LINES = 25
 GATEWAY_ENV = "UNISYNC_GATEWAY_URL"
 ORCHESTRATOR_TOKEN_ENV = "UNISYNC_ORCHESTRATOR_TOKEN"  # noqa: S105 - env var name, not a secret
 AGENT_TOKEN_ENV = "UNISYNC_AGENT_TOKEN"  # noqa: S105 - env var name, not a secret
+MAX_USAGE_BYTES = 4096
+MAX_MODEL = 100
+MAX_TOKENS = 10**9  # matches the clamp in bastion.spend_daily
+MAX_COST_MICRO_USD = 10**10  # $10,000, the view's cost_usd clamp
 
 
 def task_id(title: str, head: str) -> str:
@@ -98,6 +110,47 @@ def outcome(exit_code: int, output: str, *, run_url: str) -> tuple[str, dict[str
     return ("task.result" if exit_code == 0 else "task.failed"), body
 
 
+def _count(value: Any, ceiling: int) -> int | None:
+    """A non-negative whole number, clamped; None for anything else (bools, strings, fractions)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return min(int(value), ceiling)
+
+
+def load_usage(path: Path) -> tuple[dict[str, Any] | None, str]:
+    """Read an agent's usage file into the ledger contract. Returns (usage or None, warning or "").
+
+    Keeps only ``model`` and integer ``input_tokens``/``output_tokens``; ``cost_usd`` becomes
+    ``cost_micro_usd`` (rounded integer) because the gateway rejects floats. Agents write this file, so
+    nothing in it is trusted: wrong types, negatives and unknown keys are dropped and values are clamped.
+    """
+    try:
+        raw = path.read_bytes()[: MAX_USAGE_BYTES + 1]
+        if len(raw) > MAX_USAGE_BYTES:
+            return None, f"usage file {path} is over {MAX_USAGE_BYTES} bytes; ignored"
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"usage file {path} not read ({type(exc).__name__}); outcome posted without usage"
+    if not isinstance(data, dict):
+        return None, f"usage file {path} is not a JSON object; ignored"
+    usage: dict[str, Any] = {}
+    model = data.get("model")
+    if isinstance(model, str) and model.strip():
+        usage["model"] = model.strip()[:MAX_MODEL]
+    for key in ("input_tokens", "output_tokens"):
+        count = _count(data.get(key), MAX_TOKENS)
+        if count is not None:
+            usage[key] = count
+    cost = data.get("cost_usd")
+    if not isinstance(cost, bool) and isinstance(cost, (int, float)) and math.isfinite(cost) and cost >= 0:
+        usage["cost_micro_usd"] = min(round(cost * 1_000_000), MAX_COST_MICRO_USD)
+    if not usage:
+        return None, f"usage file {path} has no usable fields; ignored"
+    return usage, ""
+
+
 def open_gateway_ledger(token_env: str) -> Any:
     """Lestinxor's SupabaseLedger pointed at the UniSync gateway with one agent's token."""
     from lestinxor.unisync_supabase import SupabaseLedger  # type: ignore[import-not-found]  # installed by the workflow
@@ -127,6 +180,7 @@ def main(
     fin.add_argument("--exit-code", type=int, required=True)
     fin.add_argument("--log", type=Path, required=True)
     fin.add_argument("--run-url", default="")
+    fin.add_argument("--usage", type=Path, help="the agent's usage JSON (model, input/output tokens, cost_usd)")
     args = parser.parse_args(argv)
 
     if args.cmd == "request":
@@ -140,6 +194,12 @@ def main(
     else:
         output = args.log.read_text(encoding="utf-8", errors="replace") if args.log.is_file() else ""
         kind, body = outcome(args.exit_code, output, run_url=args.run_url)
+        if args.usage is not None:
+            usage, warning = load_usage(args.usage)
+            if usage:
+                body["usage"] = usage
+            if warning:
+                print(f"summon: {warning}", file=sys.stderr)
         open_ledger(AGENT_TOKEN_ENV).post(args.agent, kind, args.task_id, **body)
         print(f"{kind} {args.task_id}", file=out)
     return 0

@@ -1,0 +1,31 @@
+# Vortex MCP server on the Forge VM. Installed by forge-bootstrap.sh; enabled and started by forge-setup.sh.
+[Unit]
+Description=Vortex MCP server (Forge)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=forge
+Group=forge
+WorkingDirectory=/opt/forge/vortex
+EnvironmentFile=/etc/forge/forge.env
+# The virtualenv's interpreter, not `uv run`: same program, but nothing is written at start-up.
+ExecStart=/opt/forge/vortex/.venv/bin/python -m vortex
+Restart=always
+RestartSec=5
+MemoryMax=600M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

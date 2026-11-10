@@ -7,135 +7,229 @@
 <title>Bastion Command Centre</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" integrity="sha512-vc58qvvBdrDR4etbxMdlTt4GBQk1qjvyORR2nrsPsFPyrs+/u5c3+1Ct6upOgdZoIl7eq6k3a1UPDSNAQi/32A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+  // Apply a saved theme before first paint, so there is no flash. Absent or blocked storage = follow the system.
+  try { const t = localStorage.getItem('bx-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
-  /* Layout: one column of cards inside a gutter that grows with the width. */
+  /* Tokens. Light by default; dark follows the system unless the toggle pins a theme. */
   :root {
     color-scheme: light;
-    --color-bg: #f6f6f3; --color-panel: #ffffff; --color-fg: #16181d; --color-fg-muted: #5f6470;
-    --color-border-line: #e3e3de; --color-ok: #1d8a4e; --color-warn: #b7791f; --color-bad: #c2362f;
-    --cds-chart-muted: #a7abb3; --cds-chart-grid: #d9d9d3;
-    --font-anthropic-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --font-anthropic-serif: "Fraunces", Georgia, "Times New Roman", serif;
-    --cds-font-size-caption: .8125rem; --cds-font-size-body: .9375rem; --cds-font-size-heading: 1.0625rem; --cds-font-size-title: 1.75rem;
-    --cds-font-weight-medium: 500; --cds-radius: 10px;
-    --cds-gap-xs: .35rem; --cds-gap-sm: .6rem; --cds-gap-md: 1rem; --cds-gap-lg: 1.5rem;
-    --cds-pad-xs: .3rem; --cds-pad-sm: .55rem; --cds-pad-md: .9rem; --cds-pad-lg: 1.25rem;
-    --cds-dur-slow: .28s; --cds-ease-out: cubic-bezier(.2, .8, .2, 1);
+    --bg: #f3f4f8; --bg-glow: rgba(74, 92, 240, .10); --panel: #ffffff; --panel-2: #f7f8fb; --fg: #12141a; --muted: #5d6474;
+    --line: #e1e4ec; --line-strong: #cdd2dd; --accent: #4a5cf0; --accent-2: #a743c4; --ok: #12864a; --warn: #a3650a; --bad: #c6322b;
+    --chart-muted: #b3b8c4; --chart-grid: #dde0e8; --shadow: 0 1px 2px rgba(16, 20, 40, .05), 0 8px 24px -12px rgba(16, 20, 40, .12);
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --fs-xs: .75rem; --fs-sm: .8125rem; --fs-md: .9375rem; --fs-lg: 1.0625rem;
+    --radius: 14px; --radius-sm: 8px; --gap: 1rem; --pad: 1.25rem;
+    --dur: .28s; --ease: cubic-bezier(.2, .8, .2, 1);
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --color-bg: #0e1014; --color-panel: #161920; --color-fg: #eceef2; --color-fg-muted: #9aa0ab;
-      --color-border-line: #262a33; --color-ok: #3ccf7e; --color-warn: #e3a33a; --color-bad: #ef5a52;
-      --cds-chart-muted: #4b505b; --cds-chart-grid: #2b2f38;
+      --bg: #0a0c11; --bg-glow: rgba(109, 124, 255, .16); --panel: #11141b; --panel-2: #161a23; --fg: #e9ebf1; --muted: #8d94a3;
+      --line: #222734; --line-strong: #303747; --accent: #7484ff; --accent-2: #cf72e8; --ok: #38d283; --warn: #f1b247; --bad: #f4645c;
+      --chart-muted: #4a505e; --chart-grid: #262b37; --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 12px 32px -16px rgba(0, 0, 0, .7);
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0a0c11; --bg-glow: rgba(109, 124, 255, .16); --panel: #11141b; --panel-2: #161a23; --fg: #e9ebf1; --muted: #8d94a3;
+    --line: #222734; --line-strong: #303747; --accent: #7484ff; --accent-2: #cf72e8; --ok: #38d283; --warn: #f1b247; --bad: #f4645c;
+    --chart-muted: #4a505e; --chart-grid: #262b37; --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 12px 32px -16px rgba(0, 0, 0, .7);
+  }
+
   [hidden] { display: none !important; }
-  html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); }
-  body { font-family: var(--font-anthropic-sans); -webkit-font-smoothing: antialiased; }
-  .bx-page { max-width: 1240px; margin-inline: auto; padding-block: max(1.5rem, env(safe-area-inset-top)) 3rem;
+  html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font-family: var(--font-sans); font-size: var(--fs-md); -webkit-font-smoothing: antialiased;
+    background-image: radial-gradient(60rem 30rem at 85% -10%, var(--bg-glow), transparent 70%), radial-gradient(40rem 24rem at -10% 10%, var(--bg-glow), transparent 70%);
+    background-repeat: no-repeat; }
+  .bx code, .bx pre, .bx-mono { font-family: var(--font-mono); }
+  .bx code { font-size: .9em; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* Sticky top bar. */
+  .bx-bar-top { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
+  .bx-bar-in { max-width: 1280px; margin-inline: auto; display: flex; align-items: center; gap: var(--gap); min-height: 3.5rem;
     padding-left: max(16px, env(safe-area-inset-left), 3vw); padding-right: max(16px, env(safe-area-inset-right), 3vw); }
-  .bx { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
-  .bx-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--cds-gap-sm) var(--cds-gap-lg); align-items: end; }
-  .bx-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: clamp(2rem, 5vw, 3.25rem); line-height: 1; letter-spacing: -.02em; margin: 0; }
-  .bx-sub { margin: var(--cds-gap-xs) 0 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-body); max-width: 60ch; }
-  .bx-live { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); white-space: nowrap; padding: var(--cds-pad-xs) var(--cds-pad-sm); border: 1px solid var(--color-border-line); border-radius: 999px; background: var(--color-panel); }
-  .bx-live b { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); font-variant-numeric: tabular-nums; }
-  .bx-pulse { position: relative; width: .5rem; height: .5rem; border-radius: 50%; background: var(--color-ok); }
-  .bx-run { grid-column: 1 / -1; margin: 0; display: flex; align-items: center; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-body); }
-  .bx-run-halted { color: var(--color-bad); font-weight: var(--cds-font-weight-medium); }
-  .bx code, .bx pre, .bx-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .bx code { font-size: .92em; }
+  .bx-brand { display: inline-flex; align-items: center; gap: .55rem; font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; letter-spacing: -.01em; text-decoration: none; }
+  .bx-brand svg { width: 1.6rem; height: 1.6rem; flex: none; }
+  .bx-nav { display: flex; gap: .15rem; margin-left: .5rem; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+  .bx-nav::-webkit-scrollbar { display: none; }
+  .bx-nav a { padding: .35rem .65rem; border-radius: 999px; font-size: var(--fs-sm); color: var(--muted); text-decoration: none; white-space: nowrap; transition: background var(--dur), color var(--dur); }
+  .bx-nav a:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  .bx-bar-end { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
+  .bx-live { display: inline-flex; align-items: center; gap: .4rem; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; padding: .3rem .7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+  .bx-live b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .bx-pulse { position: relative; width: .5rem; height: .5rem; border-radius: 50%; background: var(--ok); flex: none; }
+  .bx-icon-btn { display: inline-grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; padding: 0; }
+  .bx-icon-btn:hover { border-color: var(--line-strong); }
+  .bx-icon-btn svg { width: 1rem; height: 1rem; }
+  .bx-sun { display: none; }
+  :root[data-theme="dark"] .bx-sun { display: block; } :root[data-theme="dark"] .bx-moon { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bx-sun { display: block; } :root:not([data-theme="light"]) .bx-moon { display: none; } }
 
-  .bx-dock { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--cds-gap-md); }
-  .bx-summon { display: flex; flex-direction: column; gap: var(--cds-gap-xs); padding: var(--cds-pad-md) var(--cds-pad-lg); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-panel); color: var(--color-fg); text-decoration: none; transition: transform var(--cds-dur-slow) var(--cds-ease-out), border-color var(--cds-dur-slow); }
-  .bx-summon:hover { transform: translateY(-2px); border-color: var(--color-fg-muted); }
-  .bx-summon:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
-  .bx-summon-k { display: flex; align-items: center; justify-content: space-between; gap: var(--cds-gap-sm); font-weight: var(--cds-font-weight-medium); font-size: var(--cds-font-size-heading); }
-  .bx-summon-k span:last-child { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-weight: 400; }
-  .bx-summon-d { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-  .bx-summon-primary { background: var(--color-fg); color: var(--color-bg); border-color: var(--color-fg); }
-  .bx-summon-primary .bx-summon-d, .bx-summon-primary .bx-summon-k span:last-child { color: var(--color-bg); opacity: .75; }
-  .bx-dock-note { grid-column: 1 / -1; margin: 0; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-  .bx-dock-note b { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+  /* Page. */
+  .bx-page { max-width: 1280px; margin-inline: auto; padding-block: 2rem max(3rem, env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left), 3vw); padding-right: max(16px, env(safe-area-inset-right), 3vw); }
+  .bx { display: flex; flex-direction: column; gap: 1.5rem; }
+  .bx-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--gap) 2rem; }
+  .bx-eyebrow { margin: 0 0 .4rem; font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .bx-title { font-family: var(--font-display); font-weight: 600; font-size: clamp(2rem, 4.6vw, 3.1rem); line-height: 1.02; letter-spacing: -.035em; margin: 0; }
+  .bx-sub { margin: .5rem 0 0; color: var(--muted); max-width: 60ch; }
+  .bx-run { margin: 0; display: inline-flex; align-items: center; gap: .55rem; padding: .55rem .9rem; border-radius: 999px; font-size: var(--fs-sm); font-weight: 500;
+    border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--ok); }
+  .bx-run-halted { border-color: color-mix(in srgb, var(--bad) 40%, transparent); background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  .bx-run-halted b { color: var(--fg); }
 
-  .bx-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
-  .bx-card h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
-  .bx-note { margin: 0; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-  .bx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: var(--cds-gap-md); align-items: start; }
+  /* Summon dock. */
+  .bx-dock { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: var(--gap); }
+  .bx-summon { position: relative; display: grid; grid-template-columns: auto 1fr; gap: .2rem .85rem; align-items: start; padding: 1rem 1.1rem; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); text-decoration: none; box-shadow: var(--shadow);
+    transition: transform var(--dur) var(--ease), border-color var(--dur), box-shadow var(--dur); }
+  .bx-summon:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  .bx-summon-ic { grid-row: 1 / span 2; display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .bx-summon-ic svg { width: 1.15rem; height: 1.15rem; }
+  .bx-summon-k { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; font-weight: 600; font-size: var(--fs-lg); }
+  .bx-summon-t { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 400; color: var(--muted); white-space: nowrap; }
+  .bx-summon-d { font-size: var(--fs-sm); color: var(--muted); }
+  .bx-summon-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; }
+  .bx-summon-primary:hover { border-color: transparent; box-shadow: 0 14px 30px -14px var(--accent); }
+  .bx-summon-primary .bx-summon-ic { background: rgba(255, 255, 255, .18); color: #fff; }
+  .bx-summon-primary .bx-summon-d, .bx-summon-primary .bx-summon-t { color: rgba(255, 255, 255, .82); }
+  .bx-dock-note { grid-column: 1 / -1; margin: 0; font-size: var(--fs-sm); color: var(--muted); }
+  .bx-dock-note b { color: var(--fg); font-weight: 500; }
+
+  /* Cards. */
+  .bx-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--pad); display: flex; flex-direction: column; gap: .75rem; min-width: 0; box-shadow: var(--shadow); }
+  .bx-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .bx-card h2 { margin: 0; font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em; }
+  .bx-card h3 { margin: .5rem 0 0; font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; }
+  .bx-count { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted); padding: .1rem .5rem; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); }
+  .bx-count:empty { display: none; }
+  .bx-note { margin: 0; font-size: var(--fs-sm); color: var(--muted); }
+  .bx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 27rem), 1fr)); gap: var(--gap); align-items: start; }
   .bx-wide { grid-column: 1 / -1; }
 
-  .bx-flight { display: flex; flex-direction: column; gap: var(--cds-gap-md); min-height: 6rem; }
-  .bx-job { display: flex; flex-direction: column; gap: var(--cds-gap-xs); }
-  .bx-job-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--cds-gap-xs) var(--cds-gap-sm); }
-  .bx-job-title { font-weight: var(--cds-font-weight-medium); }
-  .bx-job-meta { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
-  .bx-bar { position: relative; height: .5rem; border-radius: 999px; background: var(--color-border-line); overflow: hidden; }
-  .bx-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--bx-c, var(--color-fg)); transition: width var(--cds-dur-slow) var(--cds-ease-out); }
-  .bx-bar-live .bx-bar-fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); background-size: 50% 100%; background-repeat: no-repeat; animation: bx-sheen 1.4s linear infinite; }
-  .bx-stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--cds-gap-xs); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-  .bx-stage { display: flex; align-items: center; gap: .35rem; min-width: 0; }
-  .bx-stage[data-on="1"] { color: var(--color-fg); }
+  /* Live progress. */
+  .bx-flight { display: flex; flex-direction: column; gap: .9rem; min-height: 5rem; }
+  .bx-job { display: flex; flex-direction: column; gap: .5rem; padding: .9rem 1rem; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
+  .bx-job-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .65rem; }
+  .bx-job-title { font-weight: 600; }
+  .bx-job-meta { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bx-progress { position: relative; height: .45rem; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .bx-progress-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--bx-c, var(--fg)); transition: width var(--dur) var(--ease); }
+  .bx-progress-live .bx-progress-fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); background-size: 50% 100%; background-repeat: no-repeat; animation: bx-sheen 1.4s linear infinite; }
+  .bx-stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; font-size: var(--fs-xs); color: var(--muted); font-family: var(--font-mono); }
+  .bx-stage { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+  .bx-stage[data-on="1"] { color: var(--fg); }
   .bx-stage::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; border: 1px solid currentColor; }
   .bx-stage[data-on="1"]::before { background: currentColor; }
 
+  /* Map and chart. */
   .bx-map { position: relative; min-height: 20rem; }
-  .bx-map svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .bx-map svg, .bx-activity svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .bx-activity { min-height: 8rem; }
+  .bx-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: var(--fs-xs); color: var(--muted); }
+  .bx-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .bx-legend i { width: .6rem; height: .6rem; border-radius: 3px; display: inline-block; }
 
-  .bx-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: var(--cds-gap-md); }
-  .bx-tile { padding: var(--cds-pad-md); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); display: flex; flex-direction: column; gap: 2px; }
-  .bx-tile-label { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-  .bx-tile-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; min-height: 1.25em; }
-  .bx-tile-bad .bx-tile-value { color: var(--color-bad); }
-  .bx-tile-ok .bx-tile-value { color: var(--color-ok); }
+  /* KPI tiles. */
+  .bx-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: .75rem; }
+  .bx-tile { position: relative; padding: .85rem 1rem; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; gap: .2rem; overflow: hidden; }
+  .bx-tile::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--tile-c, var(--line-strong)); }
+  .bx-tile-label { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .bx-tile-value { font-family: var(--font-display); font-weight: 600; font-size: 1.75rem; letter-spacing: -.02em; font-variant-numeric: tabular-nums; min-height: 1.2em; line-height: 1.15; }
+  .bx-tile-ok { --tile-c: var(--ok); } .bx-tile-ok .bx-tile-value { color: var(--ok); }
+  .bx-tile-bad { --tile-c: var(--bad); } .bx-tile-bad .bx-tile-value { color: var(--bad); }
+  .bx-tile-accent { --tile-c: var(--accent); }
 
-  .bx-scroll { overflow: auto; max-height: 30rem; min-height: 5rem; }
-  .bx-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-body); font-variant-numeric: tabular-nums; }
-  .bx-table th { text-align: left; font-weight: var(--cds-font-weight-medium); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); position: sticky; top: 0; background: var(--color-panel); z-index: 1; }
-  .bx-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: top; }
+  /* Tables. */
+  .bx-scroll { overflow: auto; max-height: 30rem; min-height: 5rem; border-radius: var(--radius-sm); }
+  .bx-table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
+  .bx-table th { text-align: left; font-weight: 500; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: .5rem .6rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .bx-table td { padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .bx-table tbody tr:last-child td { border-bottom: 0; }
+  .bx-table tbody tr:not(.bx-detail):hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .bx-table tr.bx-row { cursor: pointer; }
-  .bx-table tr.bx-row:hover td { background: color-mix(in srgb, var(--color-fg) 4%, transparent); }
-  .bx-table tr.bx-row td:first-child::before { content: "▸"; display: inline-block; width: 1em; color: var(--color-fg-muted); transition: transform var(--cds-dur-slow); }
+  .bx-table tr.bx-row td:first-child::before { content: "▸"; display: inline-block; width: 1em; color: var(--muted); transition: transform var(--dur); }
   .bx-table tr.bx-row[aria-expanded="true"] td:first-child::before { transform: rotate(90deg); }
-  .bx-detail td { background: color-mix(in srgb, var(--color-fg) 3%, transparent); }
-  .bx-detail-box { display: flex; flex-direction: column; gap: var(--cds-gap-xs); padding: var(--cds-pad-xs) 0; }
-  .bx-detail-line { font-size: var(--cds-font-size-body); }
-  .bx-detail pre { margin: 0; padding: var(--cds-pad-sm); max-height: 16rem; overflow: auto; font-size: var(--cds-font-size-caption); line-height: 1.5; white-space: pre-wrap; word-break: break-word; border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); background: var(--color-bg); }
-  .bx-detail a { color: inherit; font-size: var(--cds-font-size-caption); }
-  .bx-muted { color: var(--color-fg-muted); }
+  .bx-detail td { background: var(--panel-2); }
+  .bx-detail-box { display: flex; flex-direction: column; gap: .5rem; padding: .25rem 0 .4rem; }
+  .bx-detail pre { margin: 0; padding: .75rem; max-height: 16rem; overflow: auto; font-size: var(--fs-xs); line-height: 1.6; white-space: pre-wrap; word-break: break-word; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--bg); }
+  .bx-detail a { font-size: var(--fs-sm); color: var(--accent); }
+  .bx-muted { color: var(--muted); }
   .bx-num { text-align: right; }
-  .bx-kind { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--cds-font-size-caption); white-space: nowrap; }
-  .bx-pill { display: inline-block; padding: 0 var(--cds-pad-xs); border-radius: var(--cds-radius); border: 1px solid var(--color-border-line); font-size: var(--cds-font-size-caption); white-space: nowrap; }
-  .bx-pill[data-s="done"] { color: var(--color-ok); border-color: currentColor; }
-  .bx-pill[data-s="failed"], .bx-pill[data-s="rejected"] { color: var(--color-bad); border-color: currentColor; }
-  .bx-pill[data-s="awaiting_approval"] { color: var(--color-warn); border-color: currentColor; font-weight: var(--cds-font-weight-medium); }
-  .bx-pill[data-s="claimed"], .bx-pill[data-s="open"], .bx-pill[data-s="approved"] { color: var(--color-fg); border-color: currentColor; }
-  .bx-dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: var(--cds-chart-muted); flex: none; }
-  .bx-dot[data-s="active"] { background: var(--color-ok); }
-  .bx-dot[data-s="idle"] { background: var(--color-warn); }
-  .bx-dot-bad { background: var(--color-bad); }
-  .bx-status { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); white-space: nowrap; }
-  .bx-empty { margin: 0; padding: var(--cds-pad-sm) 0; color: var(--color-fg-muted); }
-  .bx-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); word-break: break-all; }
-  .bx-fail { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); min-height: 5rem; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
-  .bx-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
-  @media (max-width: 40rem) { .bx-hide-narrow { display: none; } .bx-top { grid-template-columns: 1fr; } }
-  [data-dash-source-state=refreshing] { transition: opacity var(--cds-dur-slow); }
+  .bx-when { white-space: nowrap; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted); }
+
+  /* Chips. */
+  .bx-pill, .bx-kind { display: inline-flex; align-items: center; gap: .3rem; padding: .1rem .55rem; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; line-height: 1.5;
+    color: var(--pill-c, var(--muted)); background: color-mix(in srgb, var(--pill-c, var(--muted)) 13%, transparent); border: 1px solid color-mix(in srgb, var(--pill-c, var(--muted)) 28%, transparent); }
+  .bx-pill::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; }
+  .bx-pill[data-s="done"] { --pill-c: var(--ok); }
+  .bx-pill[data-s="failed"], .bx-pill[data-s="rejected"] { --pill-c: var(--bad); }
+  .bx-pill[data-s="awaiting_approval"] { --pill-c: var(--warn); }
+  .bx-pill[data-s="claimed"], .bx-pill[data-s="open"], .bx-pill[data-s="approved"] { --pill-c: var(--accent); }
+  .bx-kind { font-family: var(--font-mono); font-weight: 400; }
+  .bx-kind[data-k="result"] { --pill-c: var(--ok); } .bx-kind[data-k="failed"] { --pill-c: var(--bad); }
+  .bx-kind[data-k="request"] { --pill-c: var(--accent); } .bx-kind[data-k="claim"] { --pill-c: var(--accent-2); }
+
+  /* Roster. */
+  .bx-agent { display: inline-flex; align-items: center; gap: .6rem; }
+  .bx-avatar { position: relative; display: inline-grid; place-items: center; width: 1.9rem; height: 1.9rem; border-radius: 50%; flex: none;
+    font-family: var(--font-mono); font-size: .68rem; font-weight: 500; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--muted); }
+  .bx-avatar::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: .55rem; height: .55rem; border-radius: 50%; background: var(--chart-muted); border: 2px solid var(--panel); }
+  .bx-avatar[data-s="active"] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); } .bx-avatar[data-s="active"]::after { background: var(--ok); }
+  .bx-avatar[data-s="idle"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); } .bx-avatar[data-s="idle"]::after { background: var(--warn); }
+  .bx-agent-name { font-weight: 500; }
+  .bx-agent-role { display: block; font-size: var(--fs-xs); color: var(--muted); }
+
+  .bx-empty { margin: 0; padding: .5rem 0; color: var(--muted); }
+  .bx-ok-empty { display: inline-flex; align-items: center; gap: .5rem; color: var(--ok); font-size: var(--fs-sm); }
+  .bx-id { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted); word-break: break-all; }
+  .bx-fail { display: flex; align-items: center; justify-content: center; gap: .4rem; min-height: 5rem; color: var(--muted); font-size: var(--fs-sm); }
+  .bx-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--bad); }
+  .bx-foot { text-align: center; font-size: var(--fs-xs); color: var(--muted); margin: 1rem 0 0; font-family: var(--font-mono); }
+
+  @media (max-width: 40rem) { .bx-hide-narrow { display: none; } .bx-nav { display: none; } .bx-live-extra { display: none; } }
+  [data-dash-source-state=refreshing] { transition: opacity var(--dur); }
   [data-dash-source-state=empty] { color: transparent; }
   @keyframes bx-sheen { from { background-position: -50% 0; } to { background-position: 150% 0; } }
-  @keyframes bx-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-ok) 60%, transparent); } 100% { box-shadow: 0 0 0 .6rem transparent; } }
+  @keyframes bx-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 100% { box-shadow: 0 0 0 .6rem transparent; } }
   @keyframes bx-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: no-preference) {
-    .bx-pulse { animation: bx-ping 1.8s var(--cds-ease-out) infinite; }
-    .bx-job, .bx-detail-box { animation: bx-in var(--cds-dur-slow) var(--cds-ease-out); }
+    .bx-pulse { animation: bx-ping 1.8s var(--ease) infinite; }
+    .bx-detail-box { animation: bx-in var(--dur) var(--ease); }
   }
-  @media (prefers-reduced-motion: reduce) { .bx-bar-live .bx-bar-fill::after { animation: none; } }
-
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .bx-progress-live .bx-progress-fill::after { animation: none; } .bx-summon:hover { transform: none; } }
 </style>
 </head>
 <body>
+<header class="bx-bar-top">
+  <div class="bx-bar-in">
+    <a class="bx-brand" href="#overview" aria-label="Bastion, back to top">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="bx-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs><path d="M16 2.5 27 7v8.2c0 6.6-4.6 12-11 14.3C9.6 27.2 5 21.8 5 15.2V7z" fill="url(#bx-g)"/><path d="M11 12h10M11 16h10M11 20h6" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".92"/></svg>
+      Bastion
+    </a>
+    <nav class="bx-nav" aria-label="Sections">
+      <a href="#progress">Progress</a><a href="#map">Map</a><a href="#pulse">Pulse</a><a href="#tasks">Tasks</a><a href="#roster">Roster</a><a href="#feed">Feed</a>
+    </nav>
+    <div class="bx-bar-end">
+      <div class="bx-live" role="status"><span class="bx-pulse" aria-hidden="true"></span><span>Live</span><span class="bx-live-extra">· #<b data-draw="head" data-source="stats" data-field="ledger_head" data-row="0">—</b></span><span>· <b data-draw="refreshedAgo">—</b></span></div>
+      <button class="bx-icon-btn" type="button" id="bx-theme" aria-label="Switch light or dark theme" title="Switch theme">
+        <svg class="bx-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="bx-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
 <main class="bx-page" id="app">
 
 <script>
@@ -185,76 +279,84 @@
       resetParams: () => { params = {}; },
       refresh: () => load(),
       loader: () => {},
-      colors: ['#4f6bff', '#c157d6', '#1aa39a', '#e2733a', '#7a8bff', '#d6467a', '#5aa83a', '#a07a2f'],
+      colors: ['var(--accent)', 'var(--accent-2)', '#1aa39a', '#e2733a', '#7a8bff', '#d6467a', '#5aa83a', '#a07a2f'],
     };
     queueMicrotask(load);
-    window.addEventListener('resize', () => runDraw('map'));
+    let rz = 0;
+    window.addEventListener('resize', () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { runDraw('map'); runDraw('activity'); }); });
   })();
 </script>
 <div class="bx">
-  <header class="bx-top" id="overview">
+  <section class="bx-hero" id="overview">
     <div>
+      <p class="bx-eyebrow">Command centre</p>
       <h1 class="bx-title">Bastion</h1>
-      <p class="bx-sub">Command centre for the fleet. Every number is live from the UniSync ledger.</p>
+      <p class="bx-sub">Your agent fleet at a glance. Every number is live from the UniSync ledger.</p>
     </div>
-    <div class="bx-live" role="status"><span class="bx-pulse" aria-hidden="true"></span><span>Live</span><span>· ledger #<b data-draw="head" data-source="stats" data-field="ledger_head" data-row="0">—</b></span><span>· refreshed <b data-draw="refreshedAgo">—</b></span></div>
-    <p class="bx-run bx-run-ok" hidden><span class="bx-dot" data-s="active"></span> Fleet running. No halt is in force.</p>
-    <p class="bx-run bx-run-halted" hidden><span class="bx-dot bx-dot-bad"></span> Fleet halted by jonny: <b data-draw="haltReason" data-source="control" data-field="reason" data-row="0">—</b>. Run <code>linx resume</code> on your PC to lift it.</p>
-    <span data-draw="haltToggle" data-source="control"></span>
-  </header>
+    <p class="bx-run bx-run-ok" hidden><span class="bx-pulse" aria-hidden="true"></span> Fleet running · no halt in force</p>
+    <p class="bx-run bx-run-halted" hidden>Fleet halted by jonny: <b data-draw="haltReason" data-source="control" data-field="reason" data-row="0">—</b>. Run <code>linx resume</code> on your PC to lift it.</p>
+    <span data-draw="haltToggle" data-source="control" hidden></span>
+  </section>
 
   <section class="bx-dock" id="summon" aria-label="Summon an agent">
     <a class="bx-summon bx-summon-primary" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon-demo.yml">
-      <span class="bx-summon-k"><span>Summon: Demo</span><span>~10 s</span></span>
+      <span class="bx-summon-ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg></span>
+      <span class="bx-summon-k"><span>Summon: Demo</span><span class="bx-summon-t">~10 s</span></span>
       <span class="bx-summon-d">Sebastian writes a file, then proves it is right.</span>
     </a>
     <a class="bx-summon" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon-evals.yml">
-      <span class="bx-summon-k"><span>Summon: Eval suite</span><span>~1 min</span></span>
+      <span class="bx-summon-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></span>
+      <span class="bx-summon-k"><span>Summon: Eval suite</span><span class="bx-summon-t">~1 min</span></span>
       <span class="bx-summon-d">Sebastian's capability and prompt-injection tests, offline.</span>
     </a>
     <a class="bx-summon" href="https://github.com/jonnysteedman683-wq/Bastion/actions/workflows/summon.yml">
-      <span class="bx-summon-k"><span>Summon: Custom</span><span>your title</span></span>
+      <span class="bx-summon-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+      <span class="bx-summon-k"><span>Summon: Custom</span><span class="bx-summon-t">your title</span></span>
       <span class="bx-summon-d">Name the task yourself, then pick what Sebastian runs.</span>
     </a>
     <p class="bx-dock-note">Each opens GitHub: press <b>Run workflow</b>. Progress shows up below within seconds. No API key, $0.</p>
   </section>
 
   <section class="bx-card bx-wide" id="progress">
-    <h2>Live progress</h2>
+    <div class="bx-head"><h2>Live progress</h2><span class="bx-count" data-draw="countLive"></span></div>
     <p class="bx-note">Tasks in flight, or the latest one when the fleet is idle. Refreshes every 5 s while something runs.</p>
     <div class="bx-flight" data-draw="flight" data-source="tasks">—</div>
   </section>
 
   <div class="bx-grid">
     <section class="bx-card" id="map">
-      <h2>Systems map</h2>
+      <div class="bx-head"><h2>Systems map</h2></div>
       <p class="bx-note">Every agent around the ledger. Rings glow for agents that wrote in the last hour; arcs show who hands work to whom.</p>
       <div class="bx-map" data-draw="map" data-source="roster tasks"></div>
     </section>
 
     <section class="bx-card" id="pulse">
-      <h2>Fleet pulse</h2>
+      <div class="bx-head"><h2>Fleet pulse</h2></div>
       <p class="bx-note">Last 7 days unless stated.</p>
       <div class="bx-tiles">
-        <div class="bx-tile"><span class="bx-tile-label">Agents on the roster</span><span class="bx-tile-value" data-draw="tAgents" data-source="stats" data-field="agents" data-row="0">—</span></div>
-        <div class="bx-tile"><span class="bx-tile-label">Active, last 24 h</span><span class="bx-tile-value" data-draw="tActive" data-source="stats" data-field="active_24h" data-row="0">—</span></div>
+        <div class="bx-tile bx-tile-accent"><span class="bx-tile-label">Agents</span><span class="bx-tile-value" data-draw="tAgents" data-source="stats" data-field="agents" data-row="0">—</span></div>
+        <div class="bx-tile bx-tile-accent"><span class="bx-tile-label">Active, 24 h</span><span class="bx-tile-value" data-draw="tActive" data-source="stats" data-field="active_24h" data-row="0">—</span></div>
+        <div class="bx-tile bx-tile-ok"><span class="bx-tile-label">Success rate</span><span class="bx-tile-value" data-draw="tRate" data-source="stats">—</span></div>
         <div class="bx-tile bx-tile-ok"><span class="bx-tile-label">Tasks done</span><span class="bx-tile-value" data-draw="tDone" data-source="stats" data-field="done_7d" data-row="0">—</span></div>
         <div class="bx-tile bx-tile-bad"><span class="bx-tile-label">Tasks failed</span><span class="bx-tile-value" data-draw="tFailed" data-source="stats" data-field="failures_7d" data-row="0">—</span></div>
-        <div class="bx-tile"><span class="bx-tile-label">Ledger events</span><span class="bx-tile-value" data-draw="tEvents" data-source="stats" data-field="events_7d" data-row="0">—</span></div>
         <div class="bx-tile"><span class="bx-tile-label">Last event</span><span class="bx-tile-value" data-draw="tLast" data-source="stats">—</span></div>
       </div>
-      <h2>Waiting on you</h2>
+      <h3>Ledger activity</h3>
+      <p class="bx-note">Events per day over the last 14 days (UTC), from the latest 200 in the feed. <span data-draw="tEvents" data-source="stats" data-field="events_7d" data-row="0">—</span> in the last 7 days.</p>
+      <div class="bx-activity" data-draw="activity" data-source="feed"></div>
+      <div class="bx-legend"><span><i style="background:var(--ok)"></i>Results</span><span><i style="background:var(--bad)"></i>Failures</span><span><i style="background:var(--accent)"></i>Requests &amp; claims</span><span><i style="background:var(--chart-muted)"></i>Other</span></div>
+      <h3>Waiting on you</h3>
       <p class="bx-note">Decide on your PC (or the APPROVE_LINX menu) so your owner key signs it.</p>
-      <p class="bx-empty bx-empty-approvals" hidden>Nothing is waiting on you.</p>
+      <p class="bx-empty bx-empty-approvals" hidden><span class="bx-ok-empty">✓ Nothing is waiting on you.</span></p>
       <table class="bx-table" data-source="tasks" data-row-key="task_id">
-        <thead><tr><th data-field="title">Task</th><th data-field="agent">For</th><th data-field="task_id">Task id</th></tr></thead>
+        <thead><tr><th data-field="title">Task</th><th data-field="agent">For</th><th data-field="task_id" class="bx-hide-narrow">Task id</th></tr></thead>
         <tbody data-draw="approvalRows"></tbody>
       </table>
       <span data-draw="approvalState"></span>
     </section>
 
     <section class="bx-card bx-wide" id="tasks">
-      <h2>Tasks</h2>
+      <div class="bx-head"><h2>Tasks</h2><span class="bx-count" data-draw="countTasks"></span></div>
       <p class="bx-note">Tap a task to see what the agent said and its output. Status follows Lestinxor's rules.</p>
       <div class="bx-scroll">
         <table class="bx-table" data-source="tasks" data-row-key="task_id">
@@ -272,14 +374,13 @@
     </section>
 
     <section class="bx-card" id="roster">
-      <h2>Roster</h2>
+      <div class="bx-head"><h2>Roster</h2><span class="bx-count" data-draw="countRoster"></span></div>
       <p class="bx-note">Green: wrote in the last hour. Amber: the last day. Grey: quiet longer, or never.</p>
       <div class="bx-scroll">
         <table class="bx-table" data-source="roster" data-row-key="name">
           <thead><tr>
             <th data-field="name">Agent</th>
-            <th data-field="role" class="bx-hide-narrow">Role</th>
-            <th data-field="status">Status</th>
+            <th data-field="last_seen" class="bx-hide-narrow">Last seen</th>
             <th data-field="events" class="bx-num">Events</th>
           </tr></thead>
           <tbody data-draw="rosterRows"></tbody>
@@ -289,7 +390,7 @@
     </section>
 
     <section class="bx-card" id="feed">
-      <h2>Ledger feed</h2>
+      <div class="bx-head"><h2>Ledger feed</h2><span class="bx-count" data-draw="countFeed"></span></div>
       <p class="bx-note">The latest 200 events, newest first. Times in UTC.</p>
       <div class="bx-scroll">
         <table class="bx-table" data-source="feed" data-row-key="id">
@@ -306,6 +407,7 @@
       <span data-draw="failToggles"></span>
     </section>
   </div>
+  <p class="bx-foot">Bastion · read-only view of the UniSync ledger</p>
 </div>
 
 <script>
@@ -316,6 +418,14 @@
   const num = d3.format(',');
   window.bxOpen = window.bxOpen || new Set();
   window.bxLastOk = window.bxLastOk || 0;
+
+  // Theme toggle: flips between light and dark, starting from whatever is showing now.
+  document.getElementById('bx-theme').addEventListener('click', () => {
+    const root = document.documentElement;
+    const nowDark = root.dataset.theme ? root.dataset.theme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = nowDark ? 'light' : 'dark';
+    try { localStorage.setItem('bx-theme', root.dataset.theme); } catch (e) {}
+  });
 
   const ago = (iso) => {
     if (!iso) return 'never';
@@ -335,6 +445,8 @@
   };
   const cell = (tr, text, cls) => { const td = el('td', cls, text); tr.appendChild(td); return td; };
   const rows = (id) => { const d = dash.data(id); return d.status === 'ok' ? d.data : null; };
+  const kindFamily = (k) => { const s = String(k || ''); for (const f of ['failed', 'result', 'request', 'claim']) if (s.endsWith(f)) return f; return 'other'; };
+  const STATUS_LABEL = { awaiting_approval: 'awaiting approval' };
 
   // Auto-refresh: a coarse tick re-runs every query; 5 s while a task is in flight, else 15 s.
   const busy = () => (rows('tasks') || []).some((t) => IN_FLIGHT.has(t.status));
@@ -368,18 +480,29 @@
   dash.draw('tFailed', stat('failures_7d', num));
   dash.draw('tEvents', stat('events_7d', num));
   dash.draw('tLast', stat('last_event', ago));
+  dash.draw('tRate', (n) => {
+    const s = rows('stats'); const r = s && s[0];
+    const total = r ? (Number(r.done_7d) || 0) + (Number(r.failures_7d) || 0) : 0;
+    n.textContent = total ? Math.round((100 * r.done_7d) / total) + '%' : '—';
+  });
+
+  const count = (id, fn) => (n) => { const r = rows(id); n.textContent = r ? fn(r) : ''; };
+  dash.draw('countTasks', count('tasks', (r) => num(r.length)));
+  dash.draw('countRoster', count('roster', (r) => num(r.length)));
+  dash.draw('countFeed', count('feed', (r) => num(r.length)));
+  dash.draw('countLive', count('tasks', (r) => { const k = r.filter((t) => IN_FLIGHT.has(t.status)).length; return k ? k + ' in flight' : 'idle'; }));
 
   // Live progress: three stages, a bar that fills as the run goes, a sheen while it is moving.
   const stageOf = (t) => {
-    if (t.status === 'done') return { pct: 100, c: 'var(--color-ok)', live: false, label: 'Done' };
-    if (t.status === 'failed' || t.status === 'rejected') return { pct: 100, c: 'var(--color-bad)', live: false, label: t.status === 'failed' ? 'Failed' : 'Rejected' };
-    if (t.status === 'awaiting_approval') return { pct: 25, c: 'var(--color-warn)', live: false, label: 'Waiting on you' };
+    if (t.status === 'done') return { pct: 100, c: 'var(--ok)', live: false, label: 'Done' };
+    if (t.status === 'failed' || t.status === 'rejected') return { pct: 100, c: 'var(--bad)', live: false, label: t.status === 'failed' ? 'Failed' : 'Rejected' };
+    if (t.status === 'awaiting_approval') return { pct: 25, c: 'var(--warn)', live: false, label: 'Waiting on you' };
     if (t.status === 'claimed') {
       const exp = EXPECT_S[t.mode] || 60;
       const p = Math.min(92, 40 + (secs(t.claimed_ts) / exp) * 52);
-      return { pct: p, c: dash.colors[0], live: true, label: 'Running' };
+      return { pct: p, c: 'linear-gradient(90deg, var(--accent), var(--accent-2))', live: true, label: 'Running' };
     }
-    return { pct: 15, c: dash.colors[0], live: true, label: 'Queued' };
+    return { pct: 15, c: 'var(--accent)', live: true, label: 'Queued' };
   };
   dash.draw('flight', (box) => {
     const t = rows('tasks');
@@ -396,10 +519,10 @@
       const meta = r.finished_ts ? `${r.agent || ''} · ${r.mode || ''} · took ${dur(secs(r.requested_ts, r.finished_ts))} · ${ago(r.finished_ts)}`
         : `${r.agent || ''} · ${r.mode || ''} · ${dur(secs(r.requested_ts))} so far`;
       head.append(el('span', 'bx-job-meta', meta));
-      const bar = el('div', 'bx-bar' + (st.live ? ' bx-bar-live' : ''));
+      const bar = el('div', 'bx-progress' + (st.live ? ' bx-progress-live' : ''));
       bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100');
-      bar.setAttribute('aria-valuenow', String(Math.round(st.pct)));
-      const fill = el('div', 'bx-bar-fill'); fill.style.width = st.pct + '%'; fill.style.setProperty('--bx-c', st.c);
+      bar.setAttribute('aria-valuenow', String(Math.round(st.pct))); bar.setAttribute('aria-label', r.title);
+      const fill = el('div', 'bx-progress-fill'); fill.style.width = st.pct + '%'; fill.style.setProperty('--bx-c', st.c);
       bar.append(fill);
       const stages = el('div', 'bx-stages');
       for (const [name, ts] of [['Requested', r.requested_ts], ['Claimed', r.claimed_ts], [r.status === 'failed' ? 'Failed' : 'Finished', r.finished_ts]]) {
@@ -413,30 +536,78 @@
     }));
   });
 
+  // Ledger activity: events per UTC day for the last 14 days, stacked by kind.
+  dash.draw('activity', (box) => {
+    const f = rows('feed');
+    if (!f) { box.replaceChildren(); return; }
+    const end = d3.utcDay.floor(new Date());
+    const days = d3.utcDays(d3.utcDay.offset(end, -13), d3.utcDay.offset(end, 1));
+    const keys = ['result', 'failed', 'work', 'other'];
+    const fill = { result: 'var(--ok)', failed: 'var(--bad)', work: 'var(--accent)', other: 'var(--chart-muted)' };
+    const byDay = new Map(days.map((d) => [+d, { day: d, result: 0, failed: 0, work: 0, other: 0 }]));
+    for (const e of f) {
+      const b = byDay.get(+d3.utcDay.floor(new Date(e.ts)));
+      if (!b) continue;
+      const fam = kindFamily(e.kind);
+      b[fam === 'request' || fam === 'claim' ? 'work' : fam] += 1;
+    }
+    const data = [...byDay.values()];
+    const W = Math.max(280, box.clientWidth), H = 130, m = { t: 8, r: 4, b: 22, l: 26 };
+    const x = d3.scaleBand().domain(days.map((d) => +d)).range([m.l, W - m.r]).padding(0.28);
+    const max = d3.max(data, (d) => keys.reduce((s, k) => s + d[k], 0)) || 1;
+    const y = d3.scaleLinear().domain([0, max]).nice(3).range([H - m.b, m.t]);
+    const svg = d3.create('svg').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', 'Ledger events per day, last 14 days');
+    svg.append('g').selectAll('line').data(y.ticks(3)).join('line')
+      .attr('x1', m.l).attr('x2', W - m.r).attr('y1', (v) => y(v)).attr('y2', (v) => y(v)).attr('stroke', 'var(--chart-grid)').attr('stroke-dasharray', (v) => v ? '2 4' : null);
+    svg.append('g').selectAll('text').data(y.ticks(3)).join('text')
+      .attr('x', m.l - 6).attr('y', (v) => y(v) + 3).attr('text-anchor', 'end').attr('font-size', 10).attr('fill', 'var(--muted)').text((v) => v);
+    const stack = d3.stack().keys(keys)(data);
+    const g = svg.append('g');
+    for (const layer of stack) {
+      g.append('g').attr('fill', fill[layer.key]).selectAll('rect').data(layer).join('rect')
+        .attr('x', (d) => x(+d.data.day)).attr('width', x.bandwidth())
+        .attr('y', (d) => y(d[1])).attr('height', (d) => Math.max(0, y(d[0]) - y(d[1]))).attr('rx', 2);
+    }
+    // One invisible hit target per day carrying the tooltip.
+    svg.append('g').selectAll('rect').data(data).join('rect')
+      .attr('x', (d) => x(+d.day) - x.step() * x.padding() / 2).attr('width', x.step()).attr('y', m.t).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+      .append('title').text((d) => `${d3.utcFormat('%a %-d %b')(d.day)}: ${d.result} results, ${d.failed} failures, ${d.work} requests/claims, ${d.other} other`);
+    const step = W < 420 ? 3 : 2;
+    svg.append('g').selectAll('text').data(days.filter((_, i) => (days.length - 1 - i) % step === 0)).join('text')
+      .attr('x', (d) => x(+d) + x.bandwidth() / 2).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', 'var(--muted)')
+      .text((d) => d3.utcFormat('%-d %b')(d));
+    box.replaceChildren(svg.node());
+  });
+
   // Systems map: agents on a ring around the ledger; arcs for who requests work from whom.
   dash.draw('map', (box) => {
     const ro = rows('roster');
     const tk = rows('tasks') || [];
     if (!ro) { box.replaceChildren(); return; }
-    const W = Math.max(300, box.clientWidth), H = Math.round(Math.min(420, Math.max(300, W * 0.72)));
-    const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 56;
+    const W = Math.max(300, box.clientWidth), H = Math.round(Math.min(440, Math.max(320, W * 0.78)));
+    const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 54;
     const pos = new Map(ro.map((a, i) => {
       const ang = -Math.PI / 2 + (i / ro.length) * Math.PI * 2;
       return [a.name, { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang), a }];
     }));
-    const color = (s) => s === 'active' ? 'var(--color-ok)' : s === 'idle' ? 'var(--color-warn)' : 'var(--cds-chart-muted)';
+    const color = (s) => s === 'active' ? 'var(--ok)' : s === 'idle' ? 'var(--warn)' : 'var(--chart-muted)';
     const svg = d3.create('svg').attr('viewBox', `0 0 ${W} ${H}`).attr('width', '100%').attr('role', 'img')
       .attr('aria-label', 'Map of agents around the UniSync ledger');
     const defs = svg.append('defs');
     const glow = defs.append('filter').attr('id', 'bx-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
     glow.append('feGaussianBlur').attr('stdDeviation', 4).attr('result', 'b');
     const mg = glow.append('feMerge'); mg.append('feMergeNode').attr('in', 'b'); mg.append('feMergeNode').attr('in', 'SourceGraphic');
+    const core = defs.append('radialGradient').attr('id', 'bx-core');
+    core.append('stop').attr('offset', '0').attr('stop-color', 'var(--accent)').attr('stop-opacity', 0.35);
+    core.append('stop').attr('offset', '1').attr('stop-color', 'var(--accent)').attr('stop-opacity', 0);
 
+    // Orbit guides.
+    for (const k of [1, 0.55]) svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', R * k).attr('fill', 'none').attr('stroke', 'var(--chart-grid)').attr('stroke-dasharray', '2 5');
     // Spokes to the ledger.
     for (const { x, y, a } of pos.values()) {
       svg.append('line').attr('x1', cx).attr('y1', cy).attr('x2', x).attr('y2', y)
-        .attr('stroke', a.status === 'silent' ? 'var(--cds-chart-grid)' : color(a.status))
-        .attr('stroke-width', a.status === 'silent' ? 1 : 1.5).attr('stroke-dasharray', a.status === 'silent' ? '3 4' : null);
+        .attr('stroke', a.status === 'silent' ? 'var(--chart-grid)' : color(a.status))
+        .attr('stroke-width', a.status === 'silent' ? 1 : 1.5).attr('stroke-dasharray', a.status === 'silent' ? '3 4' : null).attr('opacity', a.status === 'silent' ? 1 : 0.7);
     }
     // Work handed between agents (requested_by -> agent), thicker with more tasks.
     const flows = d3.rollups(tk.filter((t) => pos.has(t.requested_by) && pos.has(t.agent) && t.requested_by !== t.agent),
@@ -451,8 +622,8 @@
         .attr('stroke-width', Math.min(6, 1.5 + Math.log2(f.n + 1))).attr('stroke-linecap', 'round').attr('opacity', 0.85);
       const id = 'bx-flow-' + key.replace(/[^a-z0-9]/gi, '');
       path.attr('id', id);
-      svg.append('text').attr('font-size', 11).attr('fill', 'var(--color-fg-muted)').attr('text-anchor', 'middle')
-        .attr('x', mx).attr('y', my).attr('paint-order', 'stroke').attr('stroke', 'var(--color-panel)').attr('stroke-width', 4)
+      svg.append('text').attr('font-size', 11).attr('fill', 'var(--muted)').attr('text-anchor', 'middle')
+        .attr('x', mx).attr('y', my).attr('paint-order', 'stroke').attr('stroke', 'var(--panel)').attr('stroke-width', 4)
         .text(`${f.n} task${f.n === 1 ? '' : 's'}`);
       if (!reduce) {
         const dot = svg.append('circle').attr('r', f.live ? 4.5 : 3).attr('fill', dash.colors[1]);
@@ -460,23 +631,24 @@
       }
     }
     // The ledger at the centre.
-    svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 30).attr('fill', 'var(--color-panel)').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.5);
-    svg.append('text').attr('x', cx).attr('y', cy - 2).attr('text-anchor', 'middle').attr('font-size', 11).attr('font-weight', 600).attr('fill', 'var(--color-fg)').text('UniSync');
-    svg.append('text').attr('x', cx).attr('y', cy + 12).attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', 'var(--color-fg-muted)').text('ledger');
+    svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 58).attr('fill', 'url(#bx-core)');
+    svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 32).attr('fill', 'var(--panel)').attr('stroke', 'var(--accent)').attr('stroke-width', 2);
+    svg.append('text').attr('x', cx).attr('y', cy - 2).attr('text-anchor', 'middle').attr('font-size', 11).attr('font-weight', 600).attr('fill', 'var(--fg)').text('UniSync');
+    svg.append('text').attr('x', cx).attr('y', cy + 12).attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', 'var(--muted)').text('ledger');
     // Agents.
     for (const { x, y, a } of pos.values()) {
       const g = svg.append('g');
       g.append('title').text(`${a.name} · ${a.role} · ${a.events} events · last seen ${ago(a.last_seen)}`);
-      g.append('circle').attr('cx', x).attr('cy', y).attr('r', 16).attr('fill', 'var(--color-panel)')
+      g.append('circle').attr('cx', x).attr('cy', y).attr('r', 17).attr('fill', 'var(--panel-2)')
         .attr('stroke', color(a.status)).attr('stroke-width', a.status === 'silent' ? 1.5 : 3)
         .attr('filter', a.status === 'active' ? 'url(#bx-glow)' : null);
       g.append('text').attr('x', x).attr('y', y + 4).attr('text-anchor', 'middle').attr('font-size', 11).attr('font-weight', 600)
-        .attr('fill', 'var(--color-fg)').text(a.name.slice(0, 2).toUpperCase());
+        .attr('fill', a.status === 'silent' ? 'var(--muted)' : 'var(--fg)').text(a.name.slice(0, 2).toUpperCase());
       const below = y >= cy;
-      g.append('text').attr('x', x).attr('y', below ? y + 32 : y - 38).attr('text-anchor', 'middle').attr('font-size', 12)
-        .attr('fill', 'var(--color-fg)').text(a.name);
-      g.append('text').attr('x', x).attr('y', below ? y + 46 : y - 24).attr('text-anchor', 'middle').attr('font-size', 10)
-        .attr('fill', 'var(--color-fg-muted)').text(a.role);
+      g.append('text').attr('x', x).attr('y', below ? y + 33 : y - 39).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 500)
+        .attr('fill', 'var(--fg)').text(a.name);
+      g.append('text').attr('x', x).attr('y', below ? y + 47 : y - 25).attr('text-anchor', 'middle').attr('font-size', 10)
+        .attr('fill', 'var(--muted)').text(a.role);
     }
     box.replaceChildren(svg.node());
   });
@@ -486,9 +658,11 @@
   dash.draw('approvalRows', (tbody) => {
     tbody.replaceChildren(...waiting().map((r) => {
       const tr = el('tr'); tr.dataset.key = r.task_id;
-      cell(tr, r.title); cell(tr, r.agent || '–', 'bx-muted'); cell(tr, r.task_id, 'bx-id');
+      cell(tr, r.title); cell(tr, r.agent || '–', 'bx-muted'); cell(tr, r.task_id, 'bx-id bx-hide-narrow');
       return tr;
     }));
+    const table = tbody.closest('table');
+    if (table) table.hidden = waiting().length === 0;
   });
   dash.draw('approvalState', () => {
     for (const n of document.querySelectorAll('.bx-empty-approvals')) n.hidden = !rows('tasks') || waiting().length > 0;
@@ -506,8 +680,8 @@
       cell(tr, r.title).title = r.task_id;
       cell(tr, r.agent || '–', 'bx-muted');
       cell(tr, r.mode || '–', 'bx-muted bx-hide-narrow');
-      const st = cell(tr, ''); const pill = el('span', 'bx-pill', r.status); pill.dataset.s = r.status; st.append(pill);
-      cell(tr, r.updated_ts ? fmtWhen(new Date(r.updated_ts)) : '–', 'bx-muted bx-hide-narrow');
+      const st = cell(tr, ''); const pill = el('span', 'bx-pill', STATUS_LABEL[r.status] || r.status); pill.dataset.s = r.status; st.append(pill);
+      cell(tr, r.updated_ts ? fmtWhen(new Date(r.updated_ts)) : '–', 'bx-when bx-hide-narrow');
       const toggle = () => { if (window.bxOpen.has(r.task_id)) window.bxOpen.delete(r.task_id); else window.bxOpen.add(r.task_id); dash.draw('taskRows'); };
       tr.addEventListener('click', toggle);
       tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
@@ -516,7 +690,7 @@
         const dr = el('tr', 'bx-detail'); dr.dataset.key = r.task_id;
         const td = el('td'); td.colSpan = 5;
         const boxd = el('div', 'bx-detail-box');
-        boxd.append(el('span', 'bx-detail-line', r.detail ? (r.status === 'failed' ? 'Why it failed: ' : 'Result: ') + r.detail : 'No result yet.'));
+        boxd.append(el('span', '', r.detail ? (r.status === 'failed' ? 'Why it failed: ' : 'Result: ') + r.detail : 'No result yet.'));
         boxd.append(el('span', 'bx-job-meta', `Requested by ${r.requested_by || '–'} · ${r.requested_ts ? fmtWhen(new Date(r.requested_ts)) : '–'}` +
           (r.finished_ts ? ` · took ${dur(secs(r.requested_ts, r.finished_ts))}` : '')));
         boxd.append(el('pre', '', r.output || 'No output was recorded for this task (older tasks predate output capture).'));
@@ -535,9 +709,11 @@
     if (!ro) { tbody.replaceChildren(); return; }
     tbody.replaceChildren(...ro.map((r) => {
       const tr = el('tr'); tr.dataset.key = r.name;
-      cell(tr, r.name); cell(tr, r.role, 'bx-muted bx-hide-narrow');
-      const st = cell(tr, ''); const w = el('span', 'bx-status'); const dot = el('span', 'bx-dot'); dot.dataset.s = r.status;
-      w.append(dot, el('span', '', r.status)); st.append(w);
+      const who = cell(tr, ''); const w = el('span', 'bx-agent');
+      const av = el('span', 'bx-avatar', r.name.slice(0, 2).toUpperCase()); av.dataset.s = r.status; av.title = r.status;
+      const nm = el('span'); nm.append(el('span', 'bx-agent-name', r.name), el('span', 'bx-agent-role', `${r.role} · ${r.status}`));
+      w.append(av, nm); who.append(w);
+      const ls = cell(tr, ago(r.last_seen), 'bx-when bx-hide-narrow'); if (r.last_seen) ls.title = r.last_seen;
       cell(tr, num(r.events), 'bx-num');
       return tr;
     }));
@@ -548,8 +724,10 @@
     if (!f) { tbody.replaceChildren(); return; }
     tbody.replaceChildren(...f.map((r) => {
       const tr = el('tr'); tr.dataset.key = String(r.id);
-      const w = cell(tr, fmtWhen(new Date(r.ts)), 'bx-muted'); w.title = r.ts;
-      cell(tr, r.agent); cell(tr, r.kind, 'bx-kind'); cell(tr, r.summary, 'bx-hide-narrow');
+      const w = cell(tr, fmtWhen(new Date(r.ts)), 'bx-when'); w.title = r.ts;
+      cell(tr, r.agent);
+      const k = cell(tr, ''); const chip = el('span', 'bx-kind', r.kind); chip.dataset.k = kindFamily(r.kind); k.append(chip);
+      cell(tr, r.summary, 'bx-hide-narrow');
       return tr;
     }));
   });

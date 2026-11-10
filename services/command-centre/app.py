@@ -1023,7 +1023,8 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
             if len(summary) > MAX_SUMMARY_LENGTH:
                 self._json(400, {"error": "summary too long"})
                 return
-            event = ingest_event(source, agent, kind, summary, str(payload.get("ts")) if payload.get("ts") is not None else None)
+            ts = payload.get("ts")
+            event = ingest_event(source, agent, kind, summary, None if ts is None else str(ts))
             self._json(201, {"id": event.id, "ts": event.ts})
 
         def _ledger_call(self, build: Any) -> None:
@@ -1125,5 +1126,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

@@ -77,5 +77,7 @@ Exit: any local AI can push events to Bastion, and the dashboard shows a unified
 - [x] H1 Ingest endpoint: `POST /api/ingest` with API-key auth, flexible JSON payload, stored in a local SQLite buffer, merged into the feed. *Done when* a curl POST from a local AI shows up in the dashboard within 5 seconds.
 - [x] H2 Source registry: JSON config of named sources (type, endpoint, auth, poll interval) loaded at startup. *Done when* adding a source to config and restarting shows it in the roster.
 - [ ] H3 Adapters: Ollama (`/api/tags`, `/api/ps`) and OpenAI-compatible (`/v1/models`) auto-discovery. *Done when* an Ollama instance on the LAN appears in the roster with its models listed.
-- [ ] H4 Hermes reporter: pushes session/cron/memory events to `/api/ingest` (or directly to Supabase). *Done when* a Hermes session shows up in the Bastion feed.
+- H4 Hermes reporter: pushes session/cron/memory events to `/api/ingest` (or directly to Supabase) (split into H4a-H4b). *Done when* a Hermes session shows up in the Bastion feed.
+  - [x] H4a Reporter: `python -m tools.report send|run` posts an agent's events to `/api/ingest` from `BASTION_URL` and `BASTION_INGEST_KEY`; `run` wraps any command and reports its start and outcome without ever failing it ([REPORT.md](REPORT.md)). *Done when* a wrapped command shows as started and finished in the feed and its agent turns active on the roster.
+  - [ ] H4b Hermes calls the reporter from its own hooks and cron jobs. Lands in Hermes's configuration on the owner's PC. *Done when* a Hermes session shows up in the Bastion feed.
 - [ ] H5 Multi-source aggregation: aggregate events/roster across N Supabase DSNs + local buffer. *Done when* events from two different Supabase projects appear in one feed.

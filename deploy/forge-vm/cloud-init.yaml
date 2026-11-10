@@ -1,0 +1,34 @@
+#cloud-config
+# Forge VM first boot (Ubuntu 24.04 on a Google Cloud e2-micro). Holds no secret.
+# create-vm.sh passes this file as `user-data`, and the rest of the bundle as other metadata keys.
+# It prepares the machine and stops: nothing is started until the owner runs forge-setup.sh.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - python3
+
+# 1 GB of swap beside the 1 GB of RAM; cloud-init creates the file and adds it to /etc/fstab.
+swap:
+  filename: /swapfile
+  size: 1G
+  maxsize: 1G
+
+users:
+  - default
+  - name: forge
+    gecos: Forge services
+    shell: /bin/bash
+    lock_passwd: true
+
+runcmd:
+  - - bash
+    - -c
+    - >-
+      set -euo pipefail;
+      curl -fsS --retry 5 -H 'Metadata-Flavor: Google'
+      -o /usr/local/sbin/forge-bootstrap.sh
+      http://metadata.google.internal/computeMetadata/v1/instance/attributes/forge-bootstrap-sh;
+      chmod 0755 /usr/local/sbin/forge-bootstrap.sh;
+      /usr/local/sbin/forge-bootstrap.sh

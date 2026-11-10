@@ -34,8 +34,9 @@ says what each file is for.
 
 ## Things to know before building the VM
 
-- **`VORTEX_REF`** in `forge.env.example` pins the Vortex-MCP commit. It currently names `main` before `apikey` mode
-  exists. It must be bumped to the apikey merge commit before the VM is built.
+- **`VORTEX_REF`** in `forge.env.example` pins the Vortex-MCP commit the VM runs (the merge of `apikey` mode).
+  To move the VM to a newer Vortex, change the pin, re-create the VM or copy the file to `/opt/forge/`, and run
+  `forge-setup.sh` again.
 - **Vortex-MCP is a private repository**, so the VM cannot fetch it on its own. `forge-setup.sh` tries without
   credentials and, if that fails, asks once (hidden) for a read-only GitHub token: fine-grained, that repository
   only, "Contents: read". The token is used for that fetch and not stored. Making the repository public removes

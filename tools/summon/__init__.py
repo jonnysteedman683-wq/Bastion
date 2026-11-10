@@ -20,6 +20,10 @@ contract (``services/command-centre/ledger/bastion_spend.sql``). The gateway ref
 in an envelope, so ``cost_usd`` from the file is sent as integer ``cost_micro_usd``. A bad usage file is a warning,
 never a reason to lose the outcome.
 
+The same file may carry ``trace_url``, the run's Langfuse trace (backlog G1c). It is posted as the outcome's
+top-level ``trace_url`` only if it is an https link to a Langfuse trace page on Langfuse Cloud or on the https
+``LANGFUSE_HOST``; anything else is dropped with a warning, because the command centre renders it as a link.
+
 Environment: ``UNISYNC_GATEWAY_URL`` (not secret), ``UNISYNC_ORCHESTRATOR_TOKEN`` and
 ``UNISYNC_AGENT_TOKEN`` (GitHub secrets; only their sha256 is stored in the ledger).
 """
@@ -36,6 +40,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 ORCHESTRATOR = "lestinxor"
 OWNER = "jonny"
@@ -51,6 +56,12 @@ MAX_USAGE_BYTES = 4096
 MAX_MODEL = 100
 MAX_TOKENS = 10**9  # matches the clamp in bastion.spend_daily
 MAX_COST_MICRO_USD = 10**10  # $10,000, the view's cost_usd clamp
+MAX_TRACE_URL = 500
+LANGFUSE_HOST_ENV = "LANGFUSE_HOST"
+LANGFUSE_CLOUD_HOSTS = frozenset(
+    {"cloud.langfuse.com", "us.cloud.langfuse.com", "jp.cloud.langfuse.com", "hipaa.cloud.langfuse.com"}
+)
+TRACE_PATH = re.compile(r"/project/[A-Za-z0-9_-]{1,100}/traces/[A-Za-z0-9_.:-]{1,200}")
 
 
 def task_id(title: str, head: str) -> str:
@@ -119,13 +130,8 @@ def _count(value: Any, ceiling: int) -> int | None:
     return min(int(value), ceiling)
 
 
-def load_usage(path: Path) -> tuple[dict[str, Any] | None, str]:
-    """Read an agent's usage file into the ledger contract. Returns (usage or None, warning or "").
-
-    Keeps only ``model`` and integer ``input_tokens``/``output_tokens``; ``cost_usd`` becomes
-    ``cost_micro_usd`` (rounded integer) because the gateway rejects floats. Agents write this file, so
-    nothing in it is trusted: wrong types, negatives and unknown keys are dropped and values are clamped.
-    """
+def read_report(path: Path) -> tuple[dict[str, Any] | None, str]:
+    """Read the agent's usage file as a JSON object. Returns (data or None, warning or "")."""
     try:
         raw = path.read_bytes()[: MAX_USAGE_BYTES + 1]
         if len(raw) > MAX_USAGE_BYTES:
@@ -135,6 +141,16 @@ def load_usage(path: Path) -> tuple[dict[str, Any] | None, str]:
         return None, f"usage file {path} not read ({type(exc).__name__}); outcome posted without usage"
     if not isinstance(data, dict):
         return None, f"usage file {path} is not a JSON object; ignored"
+    return data, ""
+
+
+def usage_from(data: dict[str, Any], path: Path) -> tuple[dict[str, Any] | None, str]:
+    """The ledger usage contract from an agent's report. Returns (usage or None, warning or "").
+
+    Keeps only ``model`` and integer ``input_tokens``/``output_tokens``; ``cost_usd`` becomes
+    ``cost_micro_usd`` (rounded integer) because the gateway rejects floats. Agents write this file, so
+    nothing in it is trusted: wrong types, negatives and unknown keys are dropped and values are clamped.
+    """
     usage: dict[str, Any] = {}
     model = data.get("model")
     if isinstance(model, str) and model.strip():
@@ -149,6 +165,44 @@ def load_usage(path: Path) -> tuple[dict[str, Any] | None, str]:
     if not usage:
         return None, f"usage file {path} has no usable fields; ignored"
     return usage, ""
+
+
+def load_usage(path: Path) -> tuple[dict[str, Any] | None, str]:
+    """Read an agent's usage file into the ledger contract. Returns (usage or None, warning or "")."""
+    data, warning = read_report(path)
+    return (None, warning) if data is None else usage_from(data, path)
+
+
+def trace_url(value: Any, *, env: dict[str, str] | Any, present: bool = True) -> tuple[str | None, str]:
+    """A Langfuse trace link safe to show as a dashboard link. Returns (url or None, warning or "").
+
+    Only ``https://<host>/project/<id>/traces/<id>`` with no userinfo, port, query or fragment, where the
+    host is Langfuse Cloud or the host of an https ``LANGFUSE_HOST``.
+    """
+    if not present:
+        return None, ""
+    reject = (None, "trace_url is not a Langfuse trace link; outcome posted without it")
+    if not isinstance(value, str) or len(value) > MAX_TRACE_URL or not value.isprintable() or " " in value:
+        return reject
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return reject
+    hosts = set(LANGFUSE_CLOUD_HOSTS)
+    own = urlsplit(str(env.get(LANGFUSE_HOST_ENV, "") or ""))
+    if own.scheme == "https" and own.hostname:
+        hosts.add(own.hostname.lower())
+    ok = (
+        parts.scheme == "https"
+        and parts.hostname in hosts
+        and parts.netloc.lower() == parts.hostname
+        and port is None
+        and not parts.query
+        and not parts.fragment
+        and TRACE_PATH.fullmatch(parts.path) is not None
+    )
+    return (value, "") if ok else reject
 
 
 def open_gateway_ledger(token_env: str) -> Any:
@@ -180,7 +234,9 @@ def main(
     fin.add_argument("--exit-code", type=int, required=True)
     fin.add_argument("--log", type=Path, required=True)
     fin.add_argument("--run-url", default="")
-    fin.add_argument("--usage", type=Path, help="the agent's usage JSON (model, input/output tokens, cost_usd)")
+    fin.add_argument(
+        "--usage", type=Path, help="the agent's usage JSON (model, input/output tokens, cost_usd, trace_url)"
+    )
     args = parser.parse_args(argv)
 
     if args.cmd == "request":
@@ -195,10 +251,18 @@ def main(
         output = args.log.read_text(encoding="utf-8", errors="replace") if args.log.is_file() else ""
         kind, body = outcome(args.exit_code, output, run_url=args.run_url)
         if args.usage is not None:
-            usage, warning = load_usage(args.usage)
-            if usage:
-                body["usage"] = usage
-            if warning:
+            data, warning = read_report(args.usage)
+            warnings = [warning]
+            if data is not None:
+                usage, warning = usage_from(data, args.usage)
+                trace, trace_warning = trace_url(data.get("trace_url"), env=os.environ, present="trace_url" in data)
+                if usage:
+                    body["usage"] = usage
+                if trace:
+                    body["trace_url"] = trace
+                # A file holding only a trace link is not a usage problem.
+                warnings = [trace_warning] if trace and not usage else [warning, trace_warning]
+            for warning in filter(None, warnings):
                 print(f"summon: {warning}", file=sys.stderr)
         open_ledger(AGENT_TOKEN_ENV).post(args.agent, kind, args.task_id, **body)
         print(f"{kind} {args.task_id}", file=out)

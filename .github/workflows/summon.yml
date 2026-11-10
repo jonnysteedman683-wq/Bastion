@@ -56,7 +56,7 @@ jobs:
       UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
-      SEBASTIAN_SHA: 098dc29c2fba8f77c2eeab168d803d14a2cb7391
+      SEBASTIAN_SHA: f67761e73039c92a2ddc6c9f4445249b08118211  # B78: --usage-out
       MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,7 +106,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ws"
           set +e
           case "$MODE" in
-            demo)  sebastian demo -w "$RUNNER_TEMP/ws" > "$RUNNER_TEMP/out.txt" 2>&1 ;;
+            demo)  sebastian demo -w "$RUNNER_TEMP/ws" --usage-out "$RUNNER_TEMP/usage.json" \
+                     > "$RUNNER_TEMP/out.txt" 2>&1 ;;
             evals) python -m sebastian.evals > "$RUNNER_TEMP/out.txt" 2>&1 ;;
             *)     echo "unknown mode: $MODE" > "$RUNNER_TEMP/out.txt"; false ;;
           esac
@@ -121,8 +122,10 @@ jobs:
           CODE: ${{ steps.run.outputs.code }}
           UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
         run: |
+          usage=()  # G1b: token usage for the Spend view, when the mode wrote one
+          if [[ -f "$RUNNER_TEMP/usage.json" ]]; then usage=(--usage "$RUNNER_TEMP/usage.json"); fi
           python -m tools.summon finish --task-id "$TASK_ID" --agent "$AGENT" \
-            --exit-code "${CODE:-1}" --log "$RUNNER_TEMP/out.txt" --run-url "$RUN_URL"
+            --exit-code "${CODE:-1}" --log "$RUNNER_TEMP/out.txt" --run-url "$RUN_URL" "${usage[@]}"
 
       - name: Summary
         if: always()

@@ -92,6 +92,21 @@ Set it up on the machine that runs Claude Code:
    that script with a `timeout` of 10 (`"async": true` on the first two keeps turns from waiting on it).
 3. Register the key under the name `Claude` in the command centre's `INGEST_AGENT_KEYS`.
 
+## Aider, and other command-line agents
+
+An agent that runs as a command needs no adapter: wrap it with `run`. Aider is on the roster this way.
+
+1. Install the agent (`uv tool install --python 3.12 aider-chat@latest`).
+2. Add `{"name": "Aider", "type": "push"}` to `sources.json` and give `Aider` a key in `INGEST_AGENT_KEYS`.
+3. Make a small launcher outside this repository (for example `aider-bastion`) that sets `BASTION_URL` and
+   `BASTION_INGEST_KEY` from a file beside it and runs:
+   ```bash
+   python -m tools.report run --label Aider --source aider -- aider <arguments>
+   ```
+
+Bastion shows `run.started` ("Aider: started") and `run.finished` or `run.failed` with the exit code and
+duration. Aider's arguments, prompts and files are never sent.
+
 ## A command centre on your own machine
 
 Agents on a PC can report to a command centre running on the same PC:

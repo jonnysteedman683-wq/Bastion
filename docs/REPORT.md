@@ -51,8 +51,8 @@ Hermes reports through its own [shell hooks](https://hermes-agent.nousresearch.c
 | `on_session_end` (fires after every turn) | `turn.finished`: "Turn completed / interrupted / failed on cli" |
 | `on_session_finalize` | `session.ended`: "Session ended on cli" |
 
-Only the event name, platform, model and outcome are sent. Messages, history, tool input, the session id and
-the working folder never leave the machine. The hook always exits 0 and prints nothing, so it cannot block
+Only the event name, platform, model and outcome are sent, with the source label `hermes`. Messages,
+history, tool input, the session id, the working folder and the machine's name never leave the machine. The hook always exits 0 and prints nothing, so it cannot block
 or change a Hermes session, whatever happens to Bastion.
 
 Set it up on the machine that runs Hermes:
@@ -75,15 +75,19 @@ Claude Code reports through its own [hooks](https://docs.claude.com/en/docs/clau
 | `SessionStart` | `session.started`: "Session started (startup / resume / clear / compact)" |
 | `Stop` (fires after every turn) | `turn.finished`: "Turn finished" |
 | `SessionEnd` | `session.ended`: "Session ended (<reason>)" |
+| `SubagentStop` | `subagent.finished`: "Subagent finished" |
+| any other hook | `claude.<event>`: "Claude Code event <event>" |
 
-Only the event name and why the session started or ended are sent. The prompt, the transcript path, the
-working folder and the session id never leave the machine. The hook always exits 0 and prints nothing.
+Only the event name and why the session started or ended are sent, with the source label `claude-code`. The
+prompt, the transcript path, the working folder, the session id and the machine's name never leave the
+machine. The hook always exits 0 and prints nothing to stdout.
 
 Set it up on the machine that runs Claude Code:
 
 1. Put a small script outside this repository (for example `~/.bastion/claude-hook.py`) that adds the
    repository to `sys.path` and calls `tools.report.main(["claude"], env=...)` with `BASTION_URL` and
-   `BASTION_INGEST_KEY`, sending the reporter's own warnings nowhere. Keep the key in a file beside it.
+   `BASTION_INGEST_KEY`, sending the reporter's warnings to a log file beside it (not to the session), so
+   you can see when Bastion was down or refused the key. Keep the key in a file beside it too.
 2. In `~/.claude/settings.json`, add a `command` hook for `SessionStart`, `Stop` and `SessionEnd` that runs
    that script with a `timeout` of 10 (`"async": true` on the first two keeps turns from waiting on it).
 3. Register the key under the name `Claude` in the command centre's `INGEST_AGENT_KEYS`.

@@ -57,7 +57,9 @@ CLAUDE_KINDS = {
     "SessionEnd": "session.ended",
     "SubagentStop": "subagent.finished",
 }
-SAFE_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-")
+SAFE_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:/-")
+# What a hook reports as its source: the agent, never this machine's name.
+HOOK_SOURCES = {"hermes": "hermes", "claude": "claude-code"}
 
 Post = Callable[[str, str, str, str, str], None]
 Run = Callable[[list[str]], Any]
@@ -73,7 +75,11 @@ def default_source() -> str:
 
 def ingest_url(base_url: str) -> str:
     """The ingest endpoint for a command centre URL, refusing any URL that would expose the key."""
-    parts = urllib.parse.urlsplit(base_url.strip())
+    try:
+        parts = urllib.parse.urlsplit(base_url.strip())
+        _ = parts.port  # a port that is not a number in range raises here
+    except ValueError:
+        raise ReportError("BASTION_URL is not a valid URL") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ReportError("BASTION_URL must be an http(s) URL")
     if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
@@ -270,6 +276,9 @@ def _hook(
         post(base_url, key, kind, summary, args.source)
     except ReportError as problem:
         err.write(f"report: warning: {agent} event not reported: {problem}\n")
+    except Exception as problem:  # e.g. RecursionError from a deeply nested payload
+        # The type only: an unexpected error's message could quote the payload or the key.
+        err.write(f"report: warning: {agent} event not reported: unexpected {type(problem).__name__}\n")
     return 0  # never disturb the agent over a reporting problem
 
 
@@ -293,7 +302,7 @@ def main(
     wrap.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command to run")
     for name, label in (("hermes", "Hermes shell-hook"), ("claude", "Claude Code hook")):
         hook = sub.add_parser(name, help=f"report a {label} event read from stdin")
-        hook.add_argument("--source", default=default_source(), help="where this ran (default: this machine's name)")
+        hook.add_argument("--source", default=HOOK_SOURCES[name], help="source label (default: the agent's name)")
     args = parser.parse_args(argv)
     env = os.environ if env is None else env
     err = sys.stderr if err is None else err

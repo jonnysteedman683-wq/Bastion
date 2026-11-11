@@ -56,6 +56,8 @@ class IngestUrlTest(unittest.TestCase):
             "https://bastion.example/?x=1",
             "bastion.example",
             "",
+            "http://[::1",  # urlsplit itself rejects this
+            "https://bastion.example:notaport",
         ):
             with self.subTest(bad), self.assertRaises(report.ReportError):
                 report.ingest_url(bad)
@@ -224,6 +226,10 @@ class HermesHookTest(unittest.TestCase):
                 self.assertEqual((code, err), (0, ""))
                 self.assertEqual([(e["kind"], e["summary"]) for e in post.events], [(kind, summary)])
 
+    def test_the_machine_name_is_not_sent(self) -> None:
+        _, post, _ = self.fire({"hook_event_name": "on_session_start", "extra": {"platform": "cli"}})
+        self.assertEqual(post.events[0]["source"], "hermes")
+
     def test_what_was_said_never_leaves_the_machine(self) -> None:
         payload = {
             "hook_event_name": "on_session_start",
@@ -308,6 +314,33 @@ class ClaudeHookTest(unittest.TestCase):
     def test_odd_values_are_not_passed_on(self) -> None:
         _, post, _ = self.fire({"hook_event_name": "SessionStart", "source": "startup\nINJECTED line"})
         self.assertEqual(post.events[0]["summary"], "Session started")
+
+    def test_underscored_reasons_are_kept(self) -> None:
+        _, post, _ = self.fire({"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"})
+        self.assertEqual(post.events[0]["summary"], "Session ended (prompt_input_exit)")
+
+    def test_the_machine_name_is_not_sent(self) -> None:
+        _, post, _ = self.fire({"hook_event_name": "Stop"})
+        self.assertEqual(post.events[0]["source"], "claude-code")
+
+    def test_a_bad_url_or_an_unexpected_error_never_fails_the_hook(self) -> None:
+        good = {"hook_event_name": "Stop"}
+        code, post, err = self.fire(good, env={**ENV, "BASTION_URL": "http://[::1"})
+        self.assertEqual((code, post.events), (0, []))
+        self.assertIn("warning", err)
+        nested = "[" * 200_000 + "]" * 200_000  # within the size limit, too deep to parse
+        code, post, err = self.fire(nested)
+        self.assertEqual((code, post.events), (0, []))
+        self.assertIn("warning", err)
+
+        def explode(*_args: object) -> None:
+            raise RuntimeError("agent-secret leaked in a message")
+
+        err_out = io.StringIO()
+        code = report.main(["claude"], env=ENV, post=explode, err=err_out, stdin=io.StringIO(json.dumps(good)))
+        self.assertEqual(code, 0)
+        self.assertIn("unexpected RuntimeError", err_out.getvalue())
+        self.assertNotIn("agent-secret", err_out.getvalue())
 
     def test_a_hook_never_fails_claude_code(self) -> None:
         good = {"hook_event_name": "Stop"}

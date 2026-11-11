@@ -266,5 +266,63 @@ class HermesHookTest(unittest.TestCase):
             self.assertNotIn("agent-secret", err)
 
 
+class ClaudeHookTest(unittest.TestCase):
+    def fire(self, payload: object, env: dict[str, str] | None = None, fail: bool = False) -> tuple[int, Recorder, str]:
+        post = Recorder(fail=fail)
+        err = io.StringIO()
+        stdin = io.StringIO(payload if isinstance(payload, str) else json.dumps(payload))
+        code = report.main(["claude"], env=ENV if env is None else env, post=post, err=err, stdin=stdin)
+        return code, post, err.getvalue()
+
+    def test_session_events_become_one_line_each(self) -> None:
+        cases = [
+            (
+                {"hook_event_name": "SessionStart", "source": "startup"},
+                ("session.started", "Session started (startup)"),
+            ),
+            ({"hook_event_name": "SessionStart"}, ("session.started", "Session started")),
+            ({"hook_event_name": "Stop", "stop_hook_active": False}, ("turn.finished", "Turn finished")),
+            ({"hook_event_name": "SessionEnd", "reason": "logout"}, ("session.ended", "Session ended (logout)")),
+            ({"hook_event_name": "PreCompact"}, ("claude.PreCompact", "Claude Code event PreCompact")),
+        ]
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                code, post, err = self.fire(payload)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual([(e["kind"], e["summary"]) for e in post.events], [expected])
+
+    def test_what_was_asked_never_leaves_the_machine(self) -> None:
+        payload = {
+            "hook_event_name": "Stop",
+            "session_id": "sess_private",
+            "transcript_path": "C:/Users/someone/.claude/projects/secret-project/t.jsonl",
+            "cwd": "C:/Users/someone/secret-project",
+            "prompt": "my password is hunter2",
+            "last_assistant_message": "hunter2 noted",
+        }
+        _, post, _ = self.fire(payload)
+        sent = json.dumps(post.events)
+        for private in ("hunter2", "sess_private", "secret-project", "someone"):
+            self.assertNotIn(private, sent)
+
+    def test_odd_values_are_not_passed_on(self) -> None:
+        _, post, _ = self.fire({"hook_event_name": "SessionStart", "source": "startup\nINJECTED line"})
+        self.assertEqual(post.events[0]["summary"], "Session started")
+
+    def test_a_hook_never_fails_claude_code(self) -> None:
+        good = {"hook_event_name": "Stop"}
+        for payload, env, fail in (
+            ("{not json", ENV, False),
+            ({"x": 1}, ENV, False),
+            (good, {}, False),
+            (good, ENV, True),
+        ):
+            code, post, err = self.fire(payload, env=env, fail=fail)
+            self.assertEqual(code, 0)
+            self.assertEqual(post.events, [])
+            self.assertIn("warning", err)
+            self.assertNotIn("agent-secret", err)
+
+
 if __name__ == "__main__":
     unittest.main()

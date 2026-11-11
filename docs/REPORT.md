@@ -65,6 +65,29 @@ Set it up on the machine that runs Hermes:
 3. Start Hermes once and approve the hooks when it asks. `hermes hooks list` shows whether they are
    approved; `hermes hooks test on_session_start` fires one without starting a session.
 
+## Claude Code
+
+Claude Code reports through its own [hooks](https://docs.claude.com/en/docs/claude-code/hooks):
+`python -m tools.report claude` reads the hook's JSON from stdin and posts one line per event.
+
+| Claude Code hook | Bastion shows |
+| --- | --- |
+| `SessionStart` | `session.started`: "Session started (startup / resume / clear / compact)" |
+| `Stop` (fires after every turn) | `turn.finished`: "Turn finished" |
+| `SessionEnd` | `session.ended`: "Session ended (<reason>)" |
+
+Only the event name and why the session started or ended are sent. The prompt, the transcript path, the
+working folder and the session id never leave the machine. The hook always exits 0 and prints nothing.
+
+Set it up on the machine that runs Claude Code:
+
+1. Put a small script outside this repository (for example `~/.bastion/claude-hook.py`) that adds the
+   repository to `sys.path` and calls `tools.report.main(["claude"], env=...)` with `BASTION_URL` and
+   `BASTION_INGEST_KEY`, sending the reporter's own warnings nowhere. Keep the key in a file beside it.
+2. In `~/.claude/settings.json`, add a `command` hook for `SessionStart`, `Stop` and `SessionEnd` that runs
+   that script with a `timeout` of 10 (`"async": true` on the first two keeps turns from waiting on it).
+3. Register the key under the name `Claude` in the command centre's `INGEST_AGENT_KEYS`.
+
 ## A command centre on your own machine
 
 Agents on a PC can report to a command centre running on the same PC:

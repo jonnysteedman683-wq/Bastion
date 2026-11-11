@@ -3,12 +3,13 @@
     python -m tools.report send --kind memory.write --summary "saved 3 notes"
     python -m tools.report run --label "nightly research" -- <the agent's command>
     python -m tools.report hermes        (a Hermes shell hook: reads the hook's JSON from stdin)
+    python -m tools.report claude        (a Claude Code hook: reads the hook's JSON from stdin)
 
 `send` posts one event to the command centre's POST /api/ingest. `run` wraps any command: it posts
 `run.started`, runs the command, then posts `run.finished` or `run.failed`, and exits with the
 command's own exit code. Reporting trouble is only ever a warning for `run`; it never stops or
-fails the agent. `hermes` turns a Hermes session hook into one event and always exits 0, so a
-reporting problem can never disturb Hermes.
+fails the agent. `hermes` and `claude` turn that agent's session hook into one event, always exit
+0 and print nothing to stdout, so a reporting problem can never disturb the agent.
 
 Configuration comes from the environment, never from arguments or files in this repository:
 
@@ -49,7 +50,16 @@ HERMES_KINDS = {
     "on_session_reset": "session.reset",
     "subagent_stop": "subagent.finished",
 }
-SAFE_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-")
+# Claude Code hook event -> the kind Bastion shows. Anything else is reported as claude.<event>.
+CLAUDE_KINDS = {
+    "SessionStart": "session.started",
+    "Stop": "turn.finished",
+    "SessionEnd": "session.ended",
+    "SubagentStop": "subagent.finished",
+}
+SAFE_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:/-")
+# What a hook reports as its source: the agent, never this machine's name.
+HOOK_SOURCES = {"hermes": "hermes", "claude": "claude-code"}
 
 Post = Callable[[str, str, str, str, str], None]
 Run = Callable[[list[str]], Any]
@@ -65,7 +75,11 @@ def default_source() -> str:
 
 def ingest_url(base_url: str) -> str:
     """The ingest endpoint for a command centre URL, refusing any URL that would expose the key."""
-    parts = urllib.parse.urlsplit(base_url.strip())
+    try:
+        parts = urllib.parse.urlsplit(base_url.strip())
+        _ = parts.port  # a port that is not a number in range raises here
+    except ValueError:
+        raise ReportError("BASTION_URL is not a valid URL") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ReportError("BASTION_URL must be an http(s) URL")
     if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
@@ -213,7 +227,42 @@ def hermes_event(payload: object) -> tuple[str, str]:
     return kind, summary
 
 
-def _hermes(args: argparse.Namespace, env: Mapping[str, str], post: Post, stdin: TextIO, err: TextIO) -> int:
+def claude_event(payload: object) -> tuple[str, str]:
+    """The (kind, summary) for a Claude Code hook payload.
+
+    Only the event name and why the session started or ended are used. The prompt, the transcript
+    path, the working folder and the session id stay on the machine.
+    """
+    if not isinstance(payload, dict):
+        raise ReportError("hook payload must be a JSON object")
+    name = _word(payload.get("hook_event_name"), "")
+    if not name:
+        raise ReportError("hook payload has no hook_event_name")
+    kind = CLAUDE_KINDS.get(name, f"claude.{name}")
+    if name == "SessionStart":
+        how = _word(payload.get("source"), "")
+        summary = "Session started" + (f" ({how})" if how else "")
+    elif name == "Stop":
+        summary = "Turn finished"
+    elif name == "SessionEnd":
+        why = _word(payload.get("reason"), "")
+        summary = "Session ended" + (f" ({why})" if why else "")
+    elif name == "SubagentStop":
+        summary = "Subagent finished"
+    else:
+        summary = f"Claude Code event {name}"
+    return kind, summary
+
+
+def _hook(
+    describe: Callable[[object], tuple[str, str]],
+    agent: str,
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    post: Post,
+    stdin: TextIO,
+    err: TextIO,
+) -> int:
     try:
         raw = stdin.read(MAX_HOOK_BYTES + 1)
         if len(raw) > MAX_HOOK_BYTES:
@@ -222,12 +271,15 @@ def _hermes(args: argparse.Namespace, env: Mapping[str, str], post: Post, stdin:
             payload = json.loads(raw)
         except ValueError:
             raise ReportError("hook payload is not JSON") from None
-        kind, summary = hermes_event(payload)
+        kind, summary = describe(payload)
         base_url, key = _config(env)
         post(base_url, key, kind, summary, args.source)
     except ReportError as problem:
-        err.write(f"report: warning: Hermes event not reported: {problem}\n")
-    return 0  # never disturb Hermes over a reporting problem
+        err.write(f"report: warning: {agent} event not reported: {problem}\n")
+    except Exception as problem:  # e.g. RecursionError from a deeply nested payload
+        # The type only: an unexpected error's message could quote the payload or the key.
+        err.write(f"report: warning: {agent} event not reported: unexpected {type(problem).__name__}\n")
+    return 0  # never disturb the agent over a reporting problem
 
 
 def main(
@@ -248,13 +300,16 @@ def main(
     wrap.add_argument("--label", default="", help="what to call this run (default: the program's name)")
     wrap.add_argument("--source", default=default_source(), help="where this ran (default: this machine's name)")
     wrap.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command to run")
-    hook = sub.add_parser("hermes", help="report a Hermes shell-hook event read from stdin")
-    hook.add_argument("--source", default=default_source(), help="where this ran (default: this machine's name)")
+    for name, label in (("hermes", "Hermes shell-hook"), ("claude", "Claude Code hook")):
+        hook = sub.add_parser(name, help=f"report a {label} event read from stdin")
+        hook.add_argument("--source", default=HOOK_SOURCES[name], help="source label (default: the agent's name)")
     args = parser.parse_args(argv)
     env = os.environ if env is None else env
     err = sys.stderr if err is None else err
     if args.action == "send":
         return _send(args, env, post, err)
     if args.action == "hermes":
-        return _hermes(args, env, post, sys.stdin if stdin is None else stdin, err)
+        return _hook(hermes_event, "Hermes", args, env, post, sys.stdin if stdin is None else stdin, err)
+    if args.action == "claude":
+        return _hook(claude_event, "Claude Code", args, env, post, sys.stdin if stdin is None else stdin, err)
     return _run(args, env, post, run, err)

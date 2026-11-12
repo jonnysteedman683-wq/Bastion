@@ -81,6 +81,14 @@ APPROVAL_FIELDS = (
     "updated_ts",
     "detail",
 )
+# A run's Langfuse trace link (backlog G1c), the shape `tools.summon finish` posts and the ledger view passes.
+LANGFUSE_CLOUD_HOSTS = frozenset(
+    {"cloud.langfuse.com", "us.cloud.langfuse.com", "jp.cloud.langfuse.com", "hipaa.cloud.langfuse.com"}
+)
+MAX_TRACE_URL = 500
+TRACE_URL = re.compile(
+    r"https://([a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)/project/[A-Za-z0-9_-]{1,100}/traces/[A-Za-z0-9_.:-]{1,200}"
+)
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_EMAIL_LENGTH = 254
 MAX_STRING_FIELD_LENGTH = 128
@@ -100,6 +108,27 @@ class Event:
     agent: str
     kind: str
     summary: str
+
+
+def safe_trace_url(value: object, env: Mapping[str, str] | None = None) -> str:
+    """The value if it is a Langfuse trace page safe to link from the dashboard, else "".
+
+    Agents write event bodies, so only ``https://<host>/project/<id>/traces/<id>`` passes, with no userinfo,
+    port, query or fragment, on Langfuse Cloud or the host of an https ``LANGFUSE_HOST``.
+    """
+    if not isinstance(value, str) or len(value) > MAX_TRACE_URL:
+        return ""
+    match = TRACE_URL.fullmatch(value)
+    if match is None:
+        return ""
+    hosts = set(LANGFUSE_CLOUD_HOSTS)
+    try:
+        own = urllib.parse.urlsplit((os.environ if env is None else env).get("LANGFUSE_HOST", "") or "")
+        if own.scheme == "https" and own.hostname:
+            hosts.add(own.hostname.lower())
+    except ValueError:
+        pass
+    return value if match.group(1) in hosts else ""
 
 
 class Ledger(Protocol):
@@ -240,6 +269,8 @@ class DemoLedger:
                 "agent": "Sebastian",
                 "updated_ts": now,
                 "detail": "3 checks passed",
+                "run_url": "https://github.com/jonnysteedman683-wq/Bastion/actions",
+                "trace_url": "https://cloud.langfuse.com/project/demo/traces/demo-complete",
             },
         ]
         return {
@@ -327,7 +358,7 @@ FEED_SQL = "SELECT id, ts, agent, kind, summary FROM bastion.feed WHERE id > :af
 ROSTER_SQL = "SELECT name, role, repos FROM bastion.roster ORDER BY name"
 DASHBOARD_TASKS_SQL = (
     "SELECT task_id, title, requested_by, agent, status, mode, run_url, requested_ts, claimed_ts, "
-    "finished_ts, updated_ts, detail FROM bastion.dashboard_tasks ORDER BY updated_ts DESC LIMIT :limit"
+    "finished_ts, updated_ts, detail, trace_url FROM bastion.dashboard_tasks ORDER BY updated_ts DESC LIMIT :limit"
 )
 STEWARD_REPORT_SQL = "SELECT scanned_ts, summary, counts, floods, items, truncated FROM bastion.steward_report LIMIT 1"
 CONTROL_SQL = "SELECT halted, reason, since FROM bastion.control LIMIT 1"
@@ -381,11 +412,15 @@ class PostgresLedger:
             "finished_ts",
             "updated_ts",
             "detail",
+            "trace_url",
         )
-        return [
+        tasks = [
             dict(zip(fields, ("" if value is None else str(value) for value in row), strict=True))
             for row in self._run(DASHBOARD_TASKS_SQL, limit=limit)
         ]
+        for task in tasks:
+            task["trace_url"] = safe_trace_url(task["trace_url"])
+        return tasks
 
     def spend(self, since: str) -> list[dict[str, object]]:
         return [

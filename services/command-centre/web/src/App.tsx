@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useApprovals, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
 
-import { isOverdue, isSafeGithubUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
+import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
@@ -223,6 +223,33 @@ function Operations({ data, now }: { data: OperationsResponse | null; now: Date 
         </Card>
 
         <FeedCard events={data.completions} now={now} limit={8} />
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Recent summons</CardTitle>
+            <CardDescription>The latest tasks, with their run and trace where one was recorded.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.tasks.length ? (
+              <ul className="space-y-2 text-sm">
+                {data.tasks.slice(0, 8).map((task) => (
+                  <li key={task.task_id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border p-2">
+                    <span className="font-medium">{task.title || task.task_id}</span>
+                    <Badge variant="outline">{task.status}</Badge>
+                    {task.agent && <span className="text-muted-foreground">{task.agent}</span>}
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                      {timeAgo(task.updated_ts, now)}
+                      {isSafeGithubUrl(task.run_url ?? null) && <> · <a className="underline" href={task.run_url} target="_blank" rel="noopener noreferrer">run</a></>}
+                      {isSafeTraceUrl(task.trace_url) && <> · <a className="underline" href={task.trace_url} target="_blank" rel="noopener noreferrer">trace</a></>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No summons yet.</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

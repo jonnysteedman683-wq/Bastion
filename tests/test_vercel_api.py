@@ -73,6 +73,44 @@ class QueriesTest(unittest.TestCase):
         self.assertEqual(len(conn.sql), 5)
         self.assertTrue(conn.closed)
 
+    def test_tasks_carry_only_langfuse_trace_links(self) -> None:
+        self.assertIn("trace_url", data.QUERIES["tasks"])
+        good = "https://cloud.langfuse.com/project/p1/traces/t1"
+        rows = [
+            {"task_id": "a", "trace_url": good},
+            {"task_id": "b", "trace_url": "https://evil.example/x"},
+            {"task_id": "c"},
+        ]
+        with mock.patch.dict(os.environ, {}, clear=True):
+            out = data.clean_tasks(rows)
+        self.assertEqual([r.get("trace_url") for r in out], [good, "", ""])
+        own = "https://lf.example.org/project/p/traces/t"
+        self.assertEqual(data.safe_trace_url(own, {}), "")
+        self.assertEqual(data.safe_trace_url(own, {"LANGFUSE_HOST": "https://lf.example.org"}), own)
+        for bad in (
+            None,
+            "http://cloud.langfuse.com/project/p/traces/t",
+            "https://cloud.langfuse.com:1/project/p/traces/t",
+            "https://u@cloud.langfuse.com/project/p/traces/t",
+            "https://cloud.langfuse.com/project/p/traces/t?q=1",
+        ):
+            self.assertEqual(data.safe_trace_url(bad, {}), "")
+
+    def test_ledger_sql_exposes_a_shape_checked_trace_link(self) -> None:
+        sql = (Path(__file__).parents[1] / "services/command-centre/ledger/bastion_tasks_control.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("trace_url text", sql)
+        self.assertIn("bastion.safe_trace_url(", sql)
+        view = sql.split("create or replace view bastion.dashboard_tasks", 1)[1].split(";", 1)[0]
+        self.assertIn("trace_url", view)
+        self.assertNotIn("output", view)
+
+    def test_public_page_links_the_trace_only_for_the_langfuse_shape(self) -> None:
+        page = (Path(__file__).parents[1] / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("r.trace_url", page)
+        self.assertIn("TRACE_URL.test(r.trace_url)", page)
+
     def test_one_failing_query_does_not_hide_the_rest(self) -> None:
         conn = FakeConn(fail={"bastion.control"})
         out = data.load(lambda: conn)

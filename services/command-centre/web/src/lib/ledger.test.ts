@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cursorOf, isOverdue, killSwitchCommand, isSafeGithubUrl, mergeEvents, timeAgo, waitingSince, type Approval, type LedgerEvent } from "./ledger";
+import { cursorOf, isOverdue, killSwitchCommand, isSafeGithubUrl, isSafeTraceUrl, mergeEvents, timeAgo, waitingSince, type Approval, type LedgerEvent } from "./ledger";
 
 const ev = (id: number): LedgerEvent => ({ id, ts: "2026-11-04T00:00:00Z", agent: "a", kind: "k", summary: "s" });
 
@@ -35,6 +35,19 @@ describe("isSafeGithubUrl", () => {
     expect(isSafeGithubUrl("https://github.com/org/repo/pull/1")).toBe(true);
     expect(isSafeGithubUrl("http://github.com/org/repo")).toBe(false);
     expect(isSafeGithubUrl("https://example.com")).toBe(false);
+  });
+});
+
+describe("isSafeTraceUrl", () => {
+  it("only allows https Langfuse trace pages", () => {
+    expect(isSafeTraceUrl("https://cloud.langfuse.com/project/p1/traces/t-1")).toBe(true);
+    expect(isSafeTraceUrl("https://langfuse.example.org/project/p1/traces/t-1")).toBe(true);
+    for (const bad of [
+      null, undefined, "", "http://cloud.langfuse.com/project/p/traces/t", "https://u@cloud.langfuse.com/project/p/traces/t",
+      "https://cloud.langfuse.com:8443/project/p/traces/t", "https://cloud.langfuse.com/project/p/traces/t?x=1",
+      "https://cloud.langfuse.com/project/p/traces/t#x", "https://cloud.langfuse.com/project/p/traces/t/extra",
+      "https://cloud.langfuse.com/other", "javascript:alert(1)",
+    ]) expect(isSafeTraceUrl(bad)).toBe(false);
   });
 });
 

@@ -13,6 +13,11 @@ Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog
 - `ledger/bastion_spend.sql`: `bastion.spend_daily`, token and dollar usage per agent per UTC day.
 - `ledger/bastion_tasks_control.sql`: `bastion.tasks` (each task's status, by Lestinxor's rules) and `bastion.control`
   (LinX's kill switch), both read-only.
+- `ledger/bastion_core.sql`: the members, agents, runs, memory, failures, cost and audit tables, each behind
+  row-level security. Captured from the live database; applied once, not safe to re-run.
+- `ledger/bastion_lockdown.sql`: takes API roles off the views that run with their owner's rights. Apply last,
+  and again after any migration that grants on all tables in the schema.
+- `ledger/audit_grants.sql`: a read-only check that must return no rows; run it after any migration.
 
 ## Data source
 

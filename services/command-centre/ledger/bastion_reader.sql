@@ -23,7 +23,8 @@ from public.unisync_events e;
 create or replace view bastion.roster as
 select a.name, a.role, a.repos from public.unisync_agents a;
 
-revoke all on all tables in schema bastion from public, anon, authenticated;
+-- Only these two views: re-running this file must not strip grants on tables other files create.
+revoke all on bastion.feed, bastion.roster from public, anon, authenticated;
 
 -- bastion_reader: can log in (once the owner sets a password), can only SELECT the two views,
 -- every transaction is read-only, and no query runs longer than 5 seconds.

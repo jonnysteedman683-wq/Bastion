@@ -619,6 +619,7 @@ class PostgresLedgerTest(unittest.TestCase):
                     "2026-11-04T11:02:00Z",
                     "2026-11-04T11:02:00Z",
                     "3 checks passed",
+                    "https://cloud.langfuse.com/project/p1/traces/t1",
                 ]
             ]
         )
@@ -626,6 +627,38 @@ class PostgresLedgerTest(unittest.TestCase):
         self.assertEqual(tasks[0]["status"], "done")
         self.assertNotIn("output", tasks[0])
         self.assertIn("FROM bastion.dashboard_tasks", conn.calls[0][0])
+        self.assertIn("trace_url", conn.calls[0][0])
+        self.assertEqual(tasks[0]["trace_url"], "https://cloud.langfuse.com/project/p1/traces/t1")
+
+    def test_task_trace_link_is_dropped_unless_it_is_a_langfuse_trace(self) -> None:
+        row = ["t", "T", "J", "S", "done", "demo", "", "", "", "", "", "", "https://evil.example/project/p/traces/t"]
+        tasks = app.PostgresLedger(lambda: FakeConn([row])).dashboard_tasks()
+        self.assertEqual(tasks[0]["trace_url"], "")
+
+    def test_safe_trace_url(self) -> None:
+        good = "https://us.cloud.langfuse.com/project/p_1/traces/abc-1.2:3"
+        self.assertEqual(app.safe_trace_url(good, {}), good)
+        own = "https://langfuse.example.org/project/p/traces/t"
+        self.assertEqual(app.safe_trace_url(own, {}), "")
+        self.assertEqual(app.safe_trace_url(own, {"LANGFUSE_HOST": "https://langfuse.example.org"}), own)
+        self.assertEqual(app.safe_trace_url(own, {"LANGFUSE_HOST": "http://langfuse.example.org"}), "")
+        for bad in (
+            None,
+            7,
+            "",
+            "http://cloud.langfuse.com/project/p/traces/t",
+            "https://user@cloud.langfuse.com/project/p/traces/t",
+            "https://cloud.langfuse.com:8443/project/p/traces/t",
+            "https://cloud.langfuse.com/project/p/traces/t?x=1",
+            "https://cloud.langfuse.com/project/p/traces/t#x",
+            "https://cloud.langfuse.com/project/p/traces/t/extra",
+            "https://CLOUD.langfuse.com/project/p/traces/t",
+            "https://cloud.langfuse.com.evil.example/project/p/traces/t",
+            "javascript:alert(1)",
+            "https://cloud.langfuse.com/project/p/traces/t\n",
+            "https://cloud.langfuse.com/project/p/traces/" + "t" * 500,
+        ):
+            self.assertEqual(app.safe_trace_url(bad, {}), "", bad)
 
     def test_events_query_and_mapping(self) -> None:
         conn = FakeConn([[9, "2026-11-04T11:00:00Z", "Sebastian", "task.request", "Run demo"]])

@@ -3,18 +3,34 @@
 
 -- Each task folded event by event exactly as Lestinxor's Ledger.status() does
 -- ('' -> open | awaiting_approval -> approved | rejected -> claimed -> done | failed),
--- plus its timeline (requested, claimed, finished), the run link, the mode and the last outcome's text.
+-- plus its timeline (requested, claimed, finished), the run link, the mode, the last outcome's text and
+-- the outcome's Langfuse trace link (backlog G1c).
 -- SECURITY DEFINER so bastion_reader sees this without any access to unisync_events itself.
 drop view if exists bastion.dashboard_tasks;
 drop view if exists bastion.steward_report;
 drop view if exists bastion.tasks;
 drop function if exists bastion.task_states();
 
+-- Agents write event bodies, so a trace link is shown only when it has exactly the shape
+-- `tools.summon finish` posts: https://<host>/project/<id>/traces/<id>, with no userinfo, port, query
+-- or fragment. Anything else reads as null. The command centre then checks the host as well.
+create or replace function bastion.safe_trace_url(v text)
+returns text
+language sql immutable set search_path = ''
+as $$
+  select case
+    when length(v) <= 500
+      and v ~ '^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?/project/[A-Za-z0-9_-]{1,100}/traces/[A-Za-z0-9_.:-]{1,200}$'
+    then v
+  end
+$$;
+revoke all on function bastion.safe_trace_url(text) from public, anon, authenticated;
+
 create function bastion.task_states()
 returns table (
   task_id text, title text, requested_by text, agent text, status text, mode text, run_url text,
   requested_ts text, claimed_ts text, finished_ts text, updated_seq bigint, updated_ts text,
-  detail text, output text
+  detail text, output text, trace_url text
 )
 language plpgsql stable security definer set search_path = ''
 as $$
@@ -22,7 +38,7 @@ as $$
 declare
   r record;
   cur text := null;
-  st text; ttl text; req text; ag text; md text; url text; det text; outp text;
+  st text; ttl text; req text; ag text; md text; url text; det text; outp text; trc text;
   t_req timestamptz; t_claim timestamptz; t_fin timestamptz; lseq bigint; lts timestamptz;
   fmt constant text := 'YYYY-MM-DD"T"HH24:MI:SS"Z"';
 begin
@@ -35,10 +51,10 @@ begin
         task_id := cur; title := ttl; requested_by := req; agent := ag; status := st; mode := md; run_url := url;
         requested_ts := to_char(t_req at time zone 'UTC', fmt); claimed_ts := to_char(t_claim at time zone 'UTC', fmt);
         finished_ts := to_char(t_fin at time zone 'UTC', fmt); updated_seq := lseq;
-        updated_ts := to_char(lts at time zone 'UTC', fmt); detail := det; output := outp;
+        updated_ts := to_char(lts at time zone 'UTC', fmt); detail := det; output := outp; trace_url := trc;
         return next;
       end if;
-      cur := r.tid; st := ''; ttl := null; req := null; ag := null; md := null; url := null; det := null; outp := null;
+      cur := r.tid; st := ''; ttl := null; req := null; ag := null; md := null; url := null; det := null; outp := null; trc := null;
       t_req := null; t_claim := null; t_fin := null;
     end if;
     if r.kind = 'task.request' then
@@ -51,10 +67,10 @@ begin
     elsif r.kind = 'task.claim' then st := 'claimed'; ag := r.sender; t_claim := r.t;
     elsif r.kind = 'task.result' then
       st := 'done'; t_fin := r.t; det := left(r.body->>'summary', 200); outp := left(r.body->>'output', 1500);
-      url := coalesce(r.body->>'run_url', url);
+      url := coalesce(r.body->>'run_url', url); trc := bastion.safe_trace_url(r.body->>'trace_url');
     elsif r.kind = 'task.failed' then
       st := 'failed'; t_fin := r.t; det := left(r.body->>'reason', 200); outp := left(r.body->>'output', 1500);
-      url := coalesce(r.body->>'run_url', url);
+      url := coalesce(r.body->>'run_url', url); trc := bastion.safe_trace_url(r.body->>'trace_url');
     end if;
     lseq := r.seq; lts := r.t;
   end loop;
@@ -62,7 +78,7 @@ begin
     task_id := cur; title := ttl; requested_by := req; agent := ag; status := st; mode := md; run_url := url;
     requested_ts := to_char(t_req at time zone 'UTC', fmt); claimed_ts := to_char(t_claim at time zone 'UTC', fmt);
     finished_ts := to_char(t_fin at time zone 'UTC', fmt); updated_seq := lseq;
-    updated_ts := to_char(lts at time zone 'UTC', fmt); detail := det; output := outp;
+    updated_ts := to_char(lts at time zone 'UTC', fmt); detail := det; output := outp; trace_url := trc;
     return next;
   end if;
 end $$;
@@ -74,7 +90,7 @@ create view bastion.tasks as select * from bastion.task_states();
 
 create or replace view bastion.dashboard_tasks as
 select task_id, title, requested_by, agent, status, mode, run_url, requested_ts, claimed_ts,
-  finished_ts, updated_ts, detail
+  finished_ts, updated_ts, detail, trace_url
 from bastion.tasks;
 
 create or replace view bastion.steward_report as

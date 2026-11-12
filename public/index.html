@@ -447,6 +447,8 @@
   const rows = (id) => { const d = dash.data(id); return d.status === 'ok' ? d.data : null; };
   const kindFamily = (k) => { const s = String(k || ''); for (const f of ['failed', 'result', 'request', 'claim']) if (s.endsWith(f)) return f; return 'other'; };
   const STATUS_LABEL = { awaiting_approval: 'awaiting approval' };
+  // A Langfuse trace page only: https, no userinfo, port, query or fragment. The API has already checked the host.
+  const TRACE_URL = /^https:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\/project\/[A-Za-z0-9_-]{1,100}\/traces\/[A-Za-z0-9_.:-]{1,200}$/;
 
   // Auto-refresh: a coarse tick re-runs every query; 5 s while a task is in flight, else 15 s.
   const busy = () => (rows('tasks') || []).some((t) => IN_FLIGHT.has(t.status));
@@ -697,6 +699,10 @@
         if (r.run_url && /^https:\/\/github\.com\//.test(r.run_url)) {
           const a = el('a', '', 'Open the run on GitHub ↗'); a.href = r.run_url; a.target = '_blank'; a.rel = 'noopener';
           boxd.append(a);
+        }
+        if (r.trace_url && r.trace_url.length <= 500 && TRACE_URL.test(r.trace_url)) {
+          const a = el('a', '', 'Open the trace on Langfuse ↗'); a.href = r.trace_url; a.target = '_blank'; a.rel = 'noopener';
+          boxd.append(document.createTextNode(' · '), a);
         }
         td.append(boxd); dr.append(td); out.push(dr);
       }

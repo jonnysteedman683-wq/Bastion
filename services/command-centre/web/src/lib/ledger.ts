@@ -20,7 +20,16 @@ export type Agent = {
 
 export type RosterResponse = { source: "demo" | "ledger"; agents: Agent[] };
 
-export type OperationTask = { task_id: string; title: string; status: string; agent: string; updated_ts: string; detail?: string };
+export type OperationTask = {
+  task_id: string;
+  title: string;
+  status: string;
+  agent: string;
+  updated_ts: string;
+  detail?: string;
+  run_url?: string;
+  trace_url?: string;
+};
 export type AttentionItem = { kind: string; title: string; detail: string };
 export type OperationsResponse = {
   source: "demo" | "ledger";
@@ -78,6 +87,13 @@ export function isSafeGithubUrl(value: string | null): boolean {
   } catch {
     return false;
   }
+}
+
+const TRACE_URL = /^https:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\/project\/[A-Za-z0-9_-]{1,100}\/traces\/[A-Za-z0-9_.:-]{1,200}$/;
+
+/** An https Langfuse trace page: no userinfo, port, query or fragment. The API has already checked the host. */
+export function isSafeTraceUrl(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.length <= 500 && TRACE_URL.test(value);
 }
 
 /** Merge newly fetched events into the feed: newest first, no duplicates, at most `cap` kept. */

@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
@@ -41,10 +42,46 @@ QUERIES: dict[str, str] = {
     "feed": "select id, ts, agent, kind, summary from bastion.feed order by id desc limit 200",
     "tasks": (
         "select task_id, title, requested_by, agent, status, mode, run_url, requested_ts, claimed_ts, "
-        "finished_ts, updated_ts, detail, output from bastion.tasks order by updated_seq desc limit 100"
+        "finished_ts, updated_ts, detail, output, trace_url from bastion.tasks order by updated_seq desc limit 100"
     ),
     "control": "select halted, reason, since from bastion.control",
 }
+
+
+# A run's Langfuse trace link (backlog G1c), the shape `tools.summon finish` posts and the ledger view passes.
+LANGFUSE_CLOUD_HOSTS = frozenset(
+    {"cloud.langfuse.com", "us.cloud.langfuse.com", "jp.cloud.langfuse.com", "hipaa.cloud.langfuse.com"}
+)
+MAX_TRACE_URL = 500
+TRACE_URL = re.compile(
+    r"https://([a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)/project/[A-Za-z0-9_-]{1,100}/traces/[A-Za-z0-9_.:-]{1,200}"
+)
+
+
+def safe_trace_url(value: object, env: Mapping[str, str] | None = None) -> str:
+    """The value if it is a Langfuse trace page safe to link from the dashboard, else "".
+
+    Agents write event bodies, so only ``https://<host>/project/<id>/traces/<id>`` passes, with no userinfo,
+    port, query or fragment, on Langfuse Cloud or the host of an https ``LANGFUSE_HOST``.
+    """
+    if not isinstance(value, str) or len(value) > MAX_TRACE_URL:
+        return ""
+    match = TRACE_URL.fullmatch(value)
+    if match is None:
+        return ""
+    hosts = set(LANGFUSE_CLOUD_HOSTS)
+    try:
+        own = urllib.parse.urlsplit((os.environ if env is None else env).get("LANGFUSE_HOST", "") or "")
+        if own.scheme == "https" and own.hostname:
+            hosts.add(own.hostname.lower())
+    except ValueError:
+        pass
+    return value if match.group(1) in hosts else ""
+
+
+def clean_tasks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Agents write event bodies: a task keeps its trace link only when it is a Langfuse trace page."""
+    return [{**row, "trace_url": safe_trace_url(row.get("trace_url"))} for row in rows]
 
 
 # Supabase signs its Postgres and pooler certificates with its own root, which is not in the public
@@ -86,7 +123,8 @@ def load(connect: Callable[[], Any]) -> dict[str, dict[str, Any]]:
             try:
                 rows = conn.run(sql)
                 cols = [c["name"] for c in conn.columns]
-                out[name] = {"status": "ok", "data": [dict(zip(cols, r, strict=False)) for r in rows]}
+                data = [dict(zip(cols, r, strict=False)) for r in rows]
+                out[name] = {"status": "ok", "data": clean_tasks(data) if name == "tasks" else data}
             except Exception:  # one view's failure must not hide the others
                 out[name] = {"status": "error", "data": [], "message": "query failed"}
     finally:

@@ -62,9 +62,10 @@ def header_text(value: str) -> str:
 def server_url(env: Mapping[str, str]) -> str:
     raw = (env.get("NTFY_URL") or DEFAULT_URL).strip()
     parts = urllib.parse.urlsplit(raw)
-    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS):
-        if parts.hostname and not parts.username and not parts.password and not parts.query and not parts.fragment:
-            return raw.rstrip("/")
+    scheme_ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
+    clean = parts.hostname and not parts.username and not parts.password and not parts.query and not parts.fragment
+    if scheme_ok and clean:
+        return raw.rstrip("/")
     raise ConfigError("NTFY_URL must be an https server URL (plain http only for localhost) with no credentials")
 
 

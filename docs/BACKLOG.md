@@ -85,3 +85,7 @@ Exit: any local AI can push events to Bastion, and the dashboard shows a unified
 - [x] H7 Claude Code reports in: `python -m tools.report claude` turns a Claude Code `SessionStart`, `Stop` or `SessionEnd` hook into one event, sending only the event and why the session started or ended ([REPORT.md](REPORT.md)). *Done when* a hook payload piped to it shows in the feed and Claude turns active on the roster.
 - [x] H6 Local command centre: `python -m tools.local` runs the command centre on `127.0.0.1` only, reads agent keys from a git-ignored `.env.local`, and signs the owner in with a one-time link printed at startup when Supabase is not configured ([REPORT.md](REPORT.md)). *Done when* a Hermes hook fired on the same PC shows in the local feed and Hermes turns active on the roster.
 - [ ] H5 Multi-source aggregation: aggregate events/roster across N Supabase DSNs + local buffer. *Done when* events from two different Supabase projects appear in one feed.
+
+## M8 · Phone
+
+- [x] P1 Installable on a phone: web manifest, icons and a service worker so the dashboard installs to the home screen and its shell opens offline (live `/api/` data is never cached). *Done when* `tests/test_pwa.py` passes and the page links the manifest.

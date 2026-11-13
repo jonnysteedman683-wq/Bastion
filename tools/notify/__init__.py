@@ -18,6 +18,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import re
 import sys
@@ -28,7 +29,6 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
 DEFAULT_URL = "https://ntfy.sh"
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 PRIORITIES = ("min", "low", "default", "high", "urgent")
 MAX_MESSAGE_BYTES = 4096  # ntfy's message limit
 MAX_HEADER = 250
@@ -43,14 +43,40 @@ class ConfigError(ValueError):
     """Bad configuration or arguments. The message never contains the topic or token."""
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it could carry the topic and token to another host, or turn the POST into a GET."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
 def http_post(url: str, body: bytes, headers: dict[str, str]) -> int:
-    """POST the body. Returns the HTTP status; HTTP errors are returned, not raised."""
+    """POST the body. Returns the HTTP status; HTTP errors, including unfollowed redirects, are returned, not raised."""
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - scheme checked by caller
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:  # noqa: S310 - scheme checked by caller
+        with OPENER.open(req, timeout=TIMEOUT_SECONDS) as resp:
             return int(resp.status)
     except urllib.error.HTTPError as exc:
         return int(exc.code)
+
+
+def split(url: str, what: str) -> urllib.parse.SplitResult:
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError:
+        raise ConfigError(f"{what} is not a valid URL") from None
+
+
+def is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host or "").is_loopback
+    except ValueError:
+        return False
 
 
 def header_text(value: str) -> str:
@@ -61,12 +87,14 @@ def header_text(value: str) -> str:
 
 def server_url(env: Mapping[str, str]) -> str:
     raw = (env.get("NTFY_URL") or DEFAULT_URL).strip()
-    parts = urllib.parse.urlsplit(raw)
-    scheme_ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
-    clean = parts.hostname and not parts.username and not parts.password and not parts.query and not parts.fragment
+    parts = split(raw, "NTFY_URL")
+    scheme_ok = parts.scheme == "https" or (parts.scheme == "http" and is_loopback(parts.hostname))
+    clean = parts.hostname and not parts.username and not parts.password and "?" not in raw and "#" not in raw
     if scheme_ok and clean:
         return raw.rstrip("/")
-    raise ConfigError("NTFY_URL must be an https server URL (plain http only for localhost) with no credentials")
+    raise ConfigError(
+        "NTFY_URL must be an https server URL (plain http only for localhost) with no credentials, query or fragment"
+    )
 
 
 def build(args: argparse.Namespace, env: Mapping[str, str]) -> tuple[str, bytes, dict[str, str]]:
@@ -86,14 +114,17 @@ def build(args: argparse.Namespace, env: Mapping[str, str]) -> tuple[str, bytes,
             raise ConfigError("--tags must be comma-separated words")
         headers["Tags"] = args.tags
     if args.click:
-        click = urllib.parse.urlsplit(args.click)
-        if click.scheme != "https" or not click.hostname or len(args.click) > 500:
-            raise ConfigError("--click must be an https link")
+        click = split(args.click, "--click")
+        printable = args.click.isascii() and args.click.isprintable()  # no newlines, controls or non-ASCII in a header
+        if click.scheme != "https" or not click.hostname or len(args.click) > 500 or not printable:
+            raise ConfigError("--click must be a plain https link")
         headers["Click"] = args.click
     token = (env.get("NTFY_TOKEN") or "").strip()
     if token:
         headers["Authorization"] = "Bearer " + header_text(token)
-    body = args.message.encode("utf-8")[:MAX_MESSAGE_BYTES]
+    body = (
+        args.message.encode("utf-8")[:MAX_MESSAGE_BYTES].decode("utf-8", "ignore").encode("utf-8")
+    )  # whole characters
     return url, body, headers
 
 
@@ -123,7 +154,9 @@ def main(
     try:
         status = post(url, body, headers)
     except (OSError, ValueError):
-        print("::error::could not reach the ntfy server", file=out)  # the error text could echo the topic URL
+        # The error text could echo the topic URL, so it is not printed. The POST may have reached ntfy before the
+        # connection failed, so a retry can send the alert twice.
+        print("::error::could not reach the ntfy server; the message may or may not have been delivered", file=out)
         return 1
     if not 200 <= status < 300:
         print(f"::error::ntfy answered HTTP {status}", file=out)

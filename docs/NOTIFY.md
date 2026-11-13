@@ -10,7 +10,8 @@ anything that needs to wake you (a cap breach, a halted agent, a failed deploy) 
 | `NTFY_URL` | Optional. Default `https://ntfy.sh`. https only (plain http for localhost) |
 | `NTFY_TOKEN` | Optional access token for a protected topic or a self-hosted server |
 
-Exit codes: 0 sent, 1 server or network failed, 2 bad configuration (nothing sent).
+Exit codes: 0 sent, 1 server or network failed, 2 bad configuration (nothing sent). Redirects are never followed.
+Exit 1 on a network error means the message *may* have been delivered, so a caller that retries can send it twice.
 
 ## One-time setup (owner)
 

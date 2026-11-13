@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 from tools import notify
@@ -99,10 +101,19 @@ class SendTests(unittest.TestCase):
         self.assertNotIn("\r", title)
         title.encode("latin-1")
 
-    def test_long_messages_are_cut_to_the_ntfy_limit(self) -> None:
-        _, _, rec = run(["send", "--message", "x" * 10000])
+    def test_long_messages_keep_the_first_bytes_up_to_the_ntfy_limit(self) -> None:
+        message = "".join(f"{i:04d}" for i in range(2000))
+        _, _, rec = run(["send", "--message", message])
 
-        self.assertEqual(len(rec.calls[0][1]), notify.MAX_MESSAGE_BYTES)
+        self.assertEqual(rec.calls[0][1], message.encode()[: notify.MAX_MESSAGE_BYTES])
+
+    def test_truncation_never_splits_a_multibyte_character(self) -> None:
+        _, _, rec = run(["send", "--message", "a" + "\u20ac" * 2000])  # euro sign: 3 bytes each
+
+        body = rec.calls[0][1]
+        body.decode("utf-8")  # must not raise
+        self.assertLessEqual(len(body), notify.MAX_MESSAGE_BYTES)
+        self.assertGreater(len(body), notify.MAX_MESSAGE_BYTES - 3)
 
     def test_click_link_must_be_https(self) -> None:
         code, _, rec = run(["send", "--message", "hi", "--click", "javascript:alert(1)"])
@@ -126,6 +137,78 @@ class SendTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertNotIn("bastion-secret-topic-123", text)
+
+
+class HardeningTests(unittest.TestCase):
+    def test_click_with_newline_or_non_ascii_is_rejected(self) -> None:
+        for click in ("https://a.org/\nX-Evil: 1", "https://a.org/\r\n", "https://a.org/caf\u00e9"):
+            code, _, rec = run(["send", "--message", "hi", "--click", click])
+            self.assertEqual(code, 2, repr(click))
+            self.assertEqual(rec.calls, [])
+
+    def test_malformed_urls_are_config_errors_not_tracebacks(self) -> None:
+        code, _, rec = run(["send", "--message", "hi"], env={**ENV, "NTFY_URL": "https://[::1"})
+        self.assertEqual(code, 2)
+        code, _, _ = run(["send", "--message", "hi", "--click", "https://[::1"])
+        self.assertEqual(code, 2)
+        self.assertEqual(rec.calls, [])
+
+    def test_a_bare_query_or_fragment_delimiter_is_rejected(self) -> None:
+        for url in ("https://ntfy.example.org?", "https://ntfy.example.org/#"):
+            code, _, rec = run(["send", "--message", "hi"], env={**ENV, "NTFY_URL": url})
+            self.assertEqual(code, 2, url)
+            self.assertEqual(rec.calls, [])
+
+    def test_any_loopback_address_may_use_plain_http(self) -> None:
+        for host in ("127.0.0.2:8081", "[::1]:8081", "localhost"):
+            code, _, _ = run(["send", "--message", "hi"], env={**ENV, "NTFY_URL": "http://" + host})
+            self.assertEqual(code, 0, host)
+
+    def test_a_non_loopback_http_address_is_still_rejected(self) -> None:
+        code, _, _ = run(["send", "--message", "hi"], env={**ENV, "NTFY_URL": "http://10.0.0.5"})
+        self.assertEqual(code, 2)
+
+    def test_a_network_failure_says_delivery_is_unknown(self) -> None:
+        def boom(url: str, body: bytes, headers: dict[str, str]) -> int:
+            raise OSError("timed out")
+
+        _, text, _ = run(["send", "--message", "hi"], post=boom)
+        self.assertIn("may or may not have been delivered", text)
+
+
+class RedirectTests(unittest.TestCase):
+    def test_redirects_are_not_followed(self) -> None:
+        hits: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                hits.append("origin")
+                self.send_response(307)
+                self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
+                self.end_headers()
+
+            def do_GET(self) -> None:
+                hits.append("followed")
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status = notify.http_post(
+                f"http://127.0.0.1:{server.server_port}/topic", b"hi", {"Authorization": "Bearer t"}
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        self.assertEqual(status, 307)
+        self.assertEqual(hits, ["origin"])
 
 
 if __name__ == "__main__":

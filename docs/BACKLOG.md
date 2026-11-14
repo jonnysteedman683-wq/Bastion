@@ -42,7 +42,7 @@ Exit: a deliberate cap breach pauses the agent and alerts Jonny.
 - G3 Healthchecks.io dead-man checks for every scheduled job (split into G3a-G3c; see [DEADMAN.md](DEADMAN.md))
   - [x] G3a Check registry `deploy/healthchecks.json` and `python -m tools.deadman validate|plan|sync`
   - [ ] G3b 🔒 Ping `/start`, success and `/fail` from every listed job (edits `.github/` in 5 repos); *Done when* pausing AIH `analytics-archive` raises an alert within an hour and re-enabling it sends a recovery
-  - [ ] G3c Command centre shows each check's status (read-only Healthchecks API key)
+  - [x] G3c Command centre shows each check's status (read-only Healthchecks API key): `GET /api/checks` and the Health view's Scheduled jobs card, worst first, a red dot on Health when any check is down or late
 
 ## M3 · Self-improvement
 Exit: a run uses yesterday's memory, and a past failure is now a test.

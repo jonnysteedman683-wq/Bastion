@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { SpendResponse } from "@/lib/spend";
+import type { ChecksResponse } from "@/lib/health";
 import { cursorOf, getJSON, mergeEvents, type ApprovalsResponse, type FeedResponse, type LedgerEvent, type OperationsResponse, type RosterResponse } from "@/lib/ledger";
 
 const FEED_POLL_MS = 5_000;
 const ROSTER_POLL_MS = 30_000;
 const SPEND_POLL_MS = 60_000;
+const HEALTH_POLL_MS = 60_000;
 
 /** Live ledger feed: loads the latest events, then polls for newer ones. */
 export function useFeed() {
@@ -114,6 +116,28 @@ export function useSpend() {
     return () => { ctrl.abort(); window.clearTimeout(timer); };
   }, []);
   return { data, error };
+}
+
+/** A JSON endpoint polled every `ms`; the server caches outside sources, so a minute is plenty. */
+function usePolled<T>(path: string, ms: number) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    let timer: number | undefined;
+    const tick = async () => {
+      try { setData(await getJSON<T>(path, ctrl.signal)); setError(null); }
+      catch (err) { if (!ctrl.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
+      if (!ctrl.signal.aborted) timer = window.setTimeout(tick, ms);
+    };
+    void tick();
+    return () => { ctrl.abort(); window.clearTimeout(timer); };
+  }, [path, ms]);
+  return { data, error };
+}
+
+export function useChecks() {
+  return usePolled<ChecksResponse>("/api/checks", HEALTH_POLL_MS);
 }
 
 /** Re-render every `ms` so relative times stay fresh. */

@@ -1,11 +1,12 @@
-import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Activity, Bot, HeartPulse, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FormEvent, Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { useApprovals, useChecks, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { CHECK_STYLE, checksHeadline, checksNeedAttention, type ChecksResponse } from "@/lib/health";
 
 import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
@@ -13,10 +14,11 @@ import { requestMagicLink, signOut } from "@/lib/auth";
 
 const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
 
-export type View = "operations" | "approvals" | "spend" | "roster" | "ledger" | "map";
+export type View = "operations" | "health" | "approvals" | "spend" | "roster" | "ledger" | "map";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
+  { id: "health", label: "Health", icon: HeartPulse },
   { id: "map", label: "Command map", icon: Map },
   { id: "approvals", label: "Approvals", icon: Inbox },
   { id: "spend", label: "Spend", icon: Coins },
@@ -33,6 +35,8 @@ export default function App() {
   const operations = useOperations();
   const approvals = useApprovals();
   const spend = useSpend();
+  const checks = useChecks();
+  const healthAlert = checksNeedAttention(checks.data);
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
@@ -62,6 +66,9 @@ export default function App() {
                   {pendingCount}
                 </span>
               )}
+              {id === "health" && healthAlert && (
+                <span className="ml-auto size-2 rounded-full bg-destructive" aria-label="needs attention" />
+              )}
             </button>
           ))}
         </nav>
@@ -82,6 +89,11 @@ export default function App() {
         {operations.data?.control.halted && <HaltBanner control={operations.data.control} now={now} />}
 
         {view === "operations" && <Operations data={operations.data} now={now} />}
+        {view === "health" && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ChecksCard data={checks.data} error={checks.error} now={now} />
+          </div>
+        )}
         {view === "map" && <CommandMap agents={roster.data?.agents} events={feed.events} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
         {view === "spend" && (
@@ -141,6 +153,47 @@ function Login() {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+function ChecksCard({ data, error, now }: { data: ChecksResponse | null; error: string | null; now: Date }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HeartPulse className="size-4" aria-hidden /> Scheduled jobs
+        </CardTitle>
+        <CardDescription>
+          {data?.configured ? checksHeadline(data) : "Dead-man checks from Healthchecks.io."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="text-sm text-destructive">Can't load checks: {error}</p>
+        ) : !data ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !data.configured ? (
+          <p className="text-sm text-muted-foreground">
+            Not connected. Set the <code>HEALTHCHECKS_API_KEY</code> secret to a read-only Healthchecks.io key.
+          </p>
+        ) : data.error ? (
+          <p className="text-sm text-destructive">{data.error}</p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {data.checks.map((check) => (
+              <li key={check.slug || check.name} className="flex items-center gap-3 rounded-md border p-2">
+                <span className={cn("size-2.5 shrink-0 rounded-full", CHECK_STYLE[check.status].dot)} aria-hidden />
+                <span className="min-w-0 flex-1 truncate font-medium" title={check.name}>{check.name || check.slug}</span>
+                <Badge variant={check.status === "down" ? "destructive" : "outline"}>{CHECK_STYLE[check.status].label}</Badge>
+                <span className="w-20 text-right text-xs tabular-nums text-muted-foreground" title={check.last_ping ?? "never"}>
+                  {timeAgo(check.last_ping, now)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

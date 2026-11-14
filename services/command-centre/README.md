@@ -3,7 +3,7 @@
 Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog item S1.
 
 - `app.py`: standard-library server. Serves `web/dist`, plus `/health`, `/api/feed`, `/api/roster`, `/api/operations`,
-  `/api/approvals` and `/api/spend`.
+  `/api/approvals`, `/api/spend` and the Health view's `/api/checks`.
 - `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Display only until G1d.
 - `web/`: React + Tailwind + shadcn/ui. The browser only talks to `app.py`, never to Supabase.
 - `roster.json`: the agents shown on the roster.
@@ -128,3 +128,13 @@ Then open http://localhost:8080. For live reload: `python app.py` in one termina
 python -m unittest discover -s services/command-centre
 cd services/command-centre/web && npm test && npm run build
 ```
+
+## Health view
+
+The **Health** view answers "is anything silently broken?". Each source is optional, read-only, cached for a
+minute so polling never floods it, and shows "Not connected" until its secret is set. Add a secret to Secret
+Manager first, then list it in `deploy.json`, or the deploy fails on the missing secret.
+
+- **Scheduled jobs** (`GET /api/checks`, backlog G3c): every [Healthchecks.io](https://healthchecks.io) check,
+  worst first. Secret `HEALTHCHECKS_API_KEY`: a **read-only** API key (project Settings → API Access). Only the
+  name, slug, state and ping times reach the browser, never a ping URL or the key.

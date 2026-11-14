@@ -34,6 +34,7 @@ Nothing in the cloud calls into an agent; agents write to the ledger, dashboards
 | `tools/report/` | Report: any agent on a PC or server tells the command centre what it is doing ([how](docs/REPORT.md)) |
 | `tools/local/` | Run the command centre on your own machine, for agents that report in locally ([how](docs/REPORT.md#a-command-centre-on-your-own-machine)) |
 | `deploy/forge-vm/` | The Forge VM: Vortex on one Always Free e2-micro behind Tailscale Funnel, with per-agent API keys ([runbook](docs/FORGE_VM.md)) |
+| `.mcp.json` | Claude Code's connection to Vortex; address and key come from the environment ([guide](docs/VORTEX_MCP.md)) |
 | `docs/` | [Quartermaster runbook](docs/QUARTERMASTER.md) and [backlog](docs/BACKLOG.md) |
 
 ## Checks

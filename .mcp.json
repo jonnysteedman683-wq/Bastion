@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vortex": {
+      "type": "http",
+      "url": "${VORTEX_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${VORTEX_API_KEY}"
+      }
+    }
+  }
+}

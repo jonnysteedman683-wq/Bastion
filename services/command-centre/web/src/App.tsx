@@ -5,8 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useChecks, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
-import { CHECK_STYLE, checksHeadline, checksNeedAttention, type ChecksResponse } from "@/lib/health";
+import { useApprovals, useChecks, useFeed, useWatcher, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { CHECK_STYLE, DRAFTER_LABEL, checksHeadline, checksNeedAttention, watcherBadge, watcherNeedsAttention, type ChecksResponse, type WatcherResponse } from "@/lib/health";
 
 import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
@@ -36,7 +36,8 @@ export default function App() {
   const approvals = useApprovals();
   const spend = useSpend();
   const checks = useChecks();
-  const healthAlert = checksNeedAttention(checks.data);
+  const watcher = useWatcher();
+  const healthAlert = checksNeedAttention(checks.data) || watcherNeedsAttention(watcher.data);
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
@@ -92,6 +93,7 @@ export default function App() {
         {view === "health" && (
           <div className="grid gap-6 lg:grid-cols-2">
             <ChecksCard data={checks.data} error={checks.error} now={now} />
+            <WatcherCard data={watcher.data} error={watcher.error} now={now} />
           </div>
         )}
         {view === "map" && <CommandMap agents={roster.data?.agents} events={feed.events} now={now} />}
@@ -191,6 +193,67 @@ function ChecksCard({ data, error, now }: { data: ChecksResponse | null; error: 
               </li>
             ))}
           </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const TONE_DOT = { ok: "bg-ok", warn: "bg-warn", idle: "bg-idle" } as const;
+
+function WatcherCard({ data, error, now }: { data: WatcherResponse | null; error: string | null; now: Date }) {
+  const badge = data?.configured && !data.error ? watcherBadge(data) : null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <Activity className="size-4" aria-hidden /> Sebastian watcher
+          {badge && (
+            <Badge variant="outline" className="ml-auto gap-1.5">
+              <span className={cn("size-2 rounded-full", TONE_DOT[badge.tone])} aria-hidden /> {badge.text}
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          {data?.last_run_at ? `Last run ${timeAgo(data.last_run_at, now)}` : "Who really writes the GROK-WATCHER reports."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {error ? (
+          <p className="text-destructive">Can't load the watcher: {error}</p>
+        ) : !data ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !data.configured ? (
+          <p className="text-muted-foreground">
+            Not connected. Set <code>WATCHER_GITHUB_TOKEN</code> to a read-only token for Sebastian's contents.
+          </p>
+        ) : data.error ? (
+          <p className="text-destructive">{data.error}</p>
+        ) : (
+          <>
+            {data.alerts.length > 0 && (
+              <ul role="alert" className="space-y-1">
+                {data.alerts.map((alert) => (
+                  <li key={alert} className="flex items-start gap-2 rounded-md border border-warn/50 bg-warn/10 p-2">
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden /> {alert}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ul className="space-y-2">
+              {data.reports.map((r) => (
+                <li key={r.seq ?? r.generated_at ?? r.summary} className="rounded-md border p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium tabular-nums">#{r.seq}</span>
+                    <Badge variant={r.drafter === "mechanical" ? "secondary" : "outline"}>{DRAFTER_LABEL[r.drafter]}</Badge>
+                    {r.escalate && <Badge variant="destructive">escalated</Badge>}
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">{timeAgo(r.generated_at, now)}</span>
+                  </div>
+                  <div className="mt-1 text-muted-foreground">{r.summary}</div>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </CardContent>
     </Card>

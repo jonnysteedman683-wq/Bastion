@@ -45,3 +45,40 @@ export function checksHeadline(data: ChecksResponse): string {
 export function checksNeedAttention(data: ChecksResponse | null): boolean {
   return !!data && ((data.counts.down ?? 0) > 0 || (data.counts.grace ?? 0) > 0);
 }
+
+// GET /api/watcher (app.py: watcher_report): who really wrote Sebastian's watcher reports.
+export type Drafter = "grok" | "mechanical" | "no_change";
+export type WatchReport = {
+  seq: number | null;
+  generated_at: string | null;
+  drafter: Drafter;
+  reason: string;
+  summary: string;
+  escalate: boolean;
+};
+export type WatcherResponse = {
+  configured: boolean;
+  repo?: string;
+  last_run_at?: string | null;
+  drafted_by?: "grok" | "mechanical" | null;
+  reports: WatchReport[];
+  alerts: string[];
+  error?: string;
+};
+
+export const DRAFTER_LABEL: Record<Drafter, string> = {
+  grok: "Grok",
+  mechanical: "machine-written",
+  no_change: "no changes",
+};
+
+/** The badge for the watcher: who wrote its latest real report. */
+export function watcherBadge(data: WatcherResponse): { text: string; tone: "ok" | "warn" | "idle" } {
+  if (data.drafted_by === "grok") return { text: "Drafted by Grok", tone: "ok" };
+  if (data.drafted_by === "mechanical") return { text: "Machine-written, not Grok", tone: "warn" };
+  return { text: "No recent drafts", tone: "idle" };
+}
+
+export function watcherNeedsAttention(data: WatcherResponse | null): boolean {
+  return !!data && (data.alerts.length > 0 || !!data.error);
+}

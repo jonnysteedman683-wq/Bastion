@@ -1,22 +1,26 @@
-import { Activity, Bot, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Activity, Bot, HeartPulse, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FormEvent, Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useFeed, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { useApprovals, useChecks, useFeed, useWatcher, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { CHECK_STYLE, DRAFTER_LABEL, checksHeadline, checksNeedAttention, watcherBadge, watcherNeedsAttention, type ChecksResponse, type WatcherResponse } from "@/lib/health";
 
 import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
+import { formatUsd } from "@/lib/spend";
+import { todayIsClear, todaySummary, type Today } from "@/lib/today";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
 const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
 
-export type View = "operations" | "approvals" | "spend" | "roster" | "ledger" | "map";
+export type View = "operations" | "health" | "approvals" | "spend" | "roster" | "ledger" | "map";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
+  { id: "health", label: "Health", icon: HeartPulse },
   { id: "map", label: "Command map", icon: Map },
   { id: "approvals", label: "Approvals", icon: Inbox },
   { id: "spend", label: "Spend", icon: Coins },
@@ -33,6 +37,9 @@ export default function App() {
   const operations = useOperations();
   const approvals = useApprovals();
   const spend = useSpend();
+  const checks = useChecks();
+  const watcher = useWatcher();
+  const healthAlert = checksNeedAttention(checks.data) || watcherNeedsAttention(watcher.data);
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
 
@@ -62,6 +69,9 @@ export default function App() {
                   {pendingCount}
                 </span>
               )}
+              {id === "health" && healthAlert && (
+                <span className="ml-auto size-2 rounded-full bg-destructive" aria-label="needs attention" />
+              )}
             </button>
           ))}
         </nav>
@@ -81,7 +91,18 @@ export default function App() {
 
         {operations.data?.control.halted && <HaltBanner control={operations.data.control} now={now} />}
 
-        {view === "operations" && <Operations data={operations.data} now={now} />}
+        {view === "operations" && (
+          <>
+            <TodayStrip today={todaySummary(operations.data?.tasks, spend.data, approvals.data?.approvals, now)} />
+            <Operations data={operations.data} now={now} />
+          </>
+        )}
+        {view === "health" && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ChecksCard data={checks.data} error={checks.error} now={now} />
+            <WatcherCard data={watcher.data} error={watcher.error} now={now} />
+          </div>
+        )}
         {view === "map" && <CommandMap agents={roster.data?.agents} events={feed.events} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
         {view === "spend" && (
@@ -141,6 +162,147 @@ function Login() {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+function ChecksCard({ data, error, now }: { data: ChecksResponse | null; error: string | null; now: Date }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HeartPulse className="size-4" aria-hidden /> Scheduled jobs
+        </CardTitle>
+        <CardDescription>
+          {data?.configured ? checksHeadline(data) : "Dead-man checks from Healthchecks.io."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="text-sm text-destructive">Can't load checks: {error}</p>
+        ) : !data ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !data.configured ? (
+          <p className="text-sm text-muted-foreground">
+            Not connected. Set the <code>HEALTHCHECKS_API_KEY</code> secret to a read-only Healthchecks.io key.
+          </p>
+        ) : data.error ? (
+          <p className="text-sm text-destructive">{data.error}</p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {data.checks.map((check) => (
+              <li key={check.slug || check.name} className="flex items-center gap-3 rounded-md border p-2">
+                <span className={cn("size-2.5 shrink-0 rounded-full", CHECK_STYLE[check.status].dot)} aria-hidden />
+                <span className="min-w-0 flex-1 truncate font-medium" title={check.name}>{check.name || check.slug}</span>
+                <Badge variant={check.status === "down" ? "destructive" : "outline"}>{CHECK_STYLE[check.status].label}</Badge>
+                <span className="w-20 text-right text-xs tabular-nums text-muted-foreground" title={check.last_ping ?? "never"}>
+                  {timeAgo(check.last_ping, now)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const TONE_DOT = { ok: "bg-ok", warn: "bg-warn", idle: "bg-idle" } as const;
+
+function WatcherCard({ data, error, now }: { data: WatcherResponse | null; error: string | null; now: Date }) {
+  const badge = data?.configured && !data.error ? watcherBadge(data) : null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <Activity className="size-4" aria-hidden /> Sebastian watcher
+          {badge && (
+            <Badge variant="outline" className="ml-auto gap-1.5">
+              <span className={cn("size-2 rounded-full", TONE_DOT[badge.tone])} aria-hidden /> {badge.text}
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          {data?.last_run_at ? `Last run ${timeAgo(data.last_run_at, now)}` : "Who really writes the GROK-WATCHER reports."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {error ? (
+          <p className="text-destructive">Can't load the watcher: {error}</p>
+        ) : !data ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !data.configured ? (
+          <p className="text-muted-foreground">
+            Not connected. Set <code>WATCHER_GITHUB_TOKEN</code> to a read-only token for Sebastian's contents.
+          </p>
+        ) : data.error ? (
+          <p className="text-destructive">{data.error}</p>
+        ) : (
+          <>
+            {data.alerts.length > 0 && (
+              <ul role="alert" className="space-y-1">
+                {data.alerts.map((alert) => (
+                  <li key={alert} className="flex items-start gap-2 rounded-md border border-warn/50 bg-warn/10 p-2">
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden /> {alert}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ul className="space-y-2">
+              {data.reports.map((r) => (
+                <li key={r.seq ?? r.generated_at ?? r.summary} className="rounded-md border p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium tabular-nums">#{r.seq}</span>
+                    <Badge variant={r.drafter === "mechanical" ? "secondary" : "outline"}>{DRAFTER_LABEL[r.drafter]}</Badge>
+                    {r.escalate && <Badge variant="destructive">escalated</Badge>}
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">{timeAgo(r.generated_at, now)}</span>
+                  </div>
+                  <div className="mt-1 text-muted-foreground">{r.summary}</div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TodayStrip({ today }: { today: Today }) {
+  const clear = todayIsClear(today);
+  const cap = today.capUsd !== null ? ` of ${formatUsd(today.capUsd)}` : "";
+  const items: { label: string; value: string; bad?: boolean }[] = [
+    { label: "finished", value: String(today.finished) },
+    { label: "failed", value: String(today.failed), bad: today.failed > 0 },
+    {
+      label: "spent",
+      value: today.spendUsd === null ? "…" : formatUsd(today.spendUsd) + cap,
+      bad: today.capStatus === "over",
+    },
+    {
+      label: today.overdue ? `waiting on you (${today.overdue} over a day)` : "waiting on you",
+      value: String(today.waiting),
+      bad: today.overdue > 0,
+    },
+  ];
+  return (
+    <section
+      aria-label="Today"
+      className={cn(
+        "flex flex-wrap items-center gap-x-5 gap-y-1 rounded-md border px-3 py-2 text-sm",
+        clear ? "border-ok/40 bg-ok/5" : "border-destructive/40 bg-destructive/5",
+      )}
+    >
+      <span className="flex items-center gap-1.5 font-medium">
+        <span className={cn("size-2 rounded-full", clear ? "bg-ok" : "bg-destructive")} aria-hidden />
+        Today {clear ? "· all clear" : "· needs a look"}
+      </span>
+      {items.map((item) => (
+        <span key={item.label} className="text-muted-foreground">
+          <span className={cn("font-medium tabular-nums text-foreground", item.bad && "text-destructive")}>{item.value}</span>{" "}
+          {item.label}
+        </span>
+      ))}
+    </section>
   );
 }
 

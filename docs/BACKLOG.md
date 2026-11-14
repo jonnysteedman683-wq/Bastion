@@ -39,10 +39,11 @@ Exit: a deliberate cap breach pauses the agent and alerts Jonny.
 - [ ] G2 Trust ladder R0-R4 with automatic demotion
 - [x] G4 🔒 Guard check: `.github/workflows/guard.yml` fails a PR touching a guarded path (AGENTS.md, CODEOWNERS) unless the owner adds `owner-approved`; `tests/test_guard.py` keeps the three lists in sync. *Done when* a PR changing `.github/` is red without the label and green with it.
 - [x] G5 Ledger lock-down in the repo: `ledger/bastion_core.sql` (captured from the live database), `ledger/bastion_lockdown.sql` (API roles off the views that run with their owner's rights) and `ledger/audit_grants.sql`; `tests/test_ledger_sql.py` fails if a ledger file grants a view to `anon` or `authenticated` outside the allowlist or if the lock-down stops covering a view. *Done when* the files applied in order to a fresh Postgres leave `audit_grants.sql` returning no rows.
-- G3 Healthchecks.io dead-man checks for every scheduled job (split into G3a-G3c; see [DEADMAN.md](DEADMAN.md))
+- G3 Healthchecks.io dead-man checks for every scheduled job (split into G3a-G3d; see [DEADMAN.md](DEADMAN.md))
   - [x] G3a Check registry `deploy/healthchecks.json` and `python -m tools.deadman validate|plan|sync`
   - [ ] G3b 🔒 Ping `/start`, success and `/fail` from every listed job (edits `.github/` in 5 repos); *Done when* pausing AIH `analytics-archive` raises an alert within an hour and re-enabling it sends a recovery
-  - [ ] G3c Command centre shows each check's status (read-only Healthchecks API key)
+  - [x] G3c Command centre shows each check's status (read-only Healthchecks API key): `GET /api/checks` and the Health view's Scheduled jobs card, worst first, a red dot on Health when any check is down or late
+  - [x] G3d Watcher honesty: `GET /api/watcher` reads Sebastian's `watch-state` branch (read-only `WATCHER_GITHUB_TOKEN`) and the Health view says who really wrote the newest `GROK-WATCHER` reports, Grok or the mechanical fallback, with alerts for all-mechanical drafts, a stale watcher and failing deliveries. *Done when* a machine-written report shows "Machine-written, not Grok" and a red dot on Health.
 
 ## M3 · Self-improvement
 Exit: a run uses yesterday's memory, and a past failure is now a test.
@@ -73,6 +74,7 @@ Exit: Jonny can see and decide everything waiting on him from the command centre
 - [x] O1 Approvals view: `GET /api/approvals` lists every task awaiting approval, oldest first, with a copyable `linx approve`/`linx reject` command (none for task ids unsafe to paste into a shell); flags anything waiting over a day. *Done when* a pending task on the ledger shows in the view with a working copy button.
 - [ ] O2 🔒 One-click decisions: the dashboard posts an unsigned `approval.intent` (new write-only role) and a LinX relay on the owner's PC signs it with the owner key. Needs S2 (Cloudflare Access) first. *Done when* clicking Approve lands a signed `approval.decision` on the ledger and the task leaves the view.
 - [x] O3 Kill switch panel: show `bastion.control` (halted, reason, since) as a banner and a copyable `linx halt`/`linx resume`. *Done when* a halt on the ledger shows the banner within 5 seconds.
+- [x] O4 Today strip: one line at the top of Operations with tasks finished and failed today (UTC), spend against the fleet cap, and approvals waiting (and over a day old), green when all clear. Built from data the page already loads; no new endpoint. *Done when* a failed task today turns the strip red.
 
 ## M6 · AI Hub
 Exit: any local AI can push events to Bastion, and the dashboard shows a unified mixed feed from all connected sources.

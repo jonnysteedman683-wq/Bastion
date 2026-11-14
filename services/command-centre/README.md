@@ -3,7 +3,7 @@
 Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog item S1.
 
 - `app.py`: standard-library server. Serves `web/dist`, plus `/health`, `/api/feed`, `/api/roster`, `/api/operations`,
-  `/api/approvals` and `/api/spend`.
+  `/api/approvals`, `/api/spend` and the Health view's `/api/checks` and `/api/watcher`.
 - `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Display only until G1d.
 - `web/`: React + Tailwind + shadcn/ui. The browser only talks to `app.py`, never to Supabase.
 - `roster.json`: the agents shown on the roster.
@@ -128,3 +128,25 @@ Then open http://localhost:8080. For live reload: `python app.py` in one termina
 python -m unittest discover -s services/command-centre
 cd services/command-centre/web && npm test && npm run build
 ```
+
+## Health view
+
+The **Health** view answers "is anything silently broken?". Each source is optional, read-only, cached for a
+minute so polling never floods it, and shows "Not connected" until its secret is set. Add a secret to Secret
+Manager first, then list it in `deploy.json`, or the deploy fails on the missing secret.
+
+- **Scheduled jobs** (`GET /api/checks`, backlog G3c): every [Healthchecks.io](https://healthchecks.io) check,
+  worst first. Secret `HEALTHCHECKS_API_KEY`: a **read-only** API key (project Settings → API Access). Only the
+  name, slug, state and ping times reach the browser, never a ping URL or the key.
+- **Sebastian watcher** (`GET /api/watcher`, backlog G3d): the watcher's reports are signed `GROK-WATCHER`, but when
+  no Grok draft service answers, the watcher writes them itself from commit messages. This card reads its
+  `watch-state` branch (`state.json` and the newest three reports) and says who actually wrote them, with alerts
+  when every recent draft is machine-written, the watcher has not run for 26 hours, or its draft service, deliveries
+  or coordinator are failing. Secret `WATCHER_GITHUB_TOKEN`: a fine-grained token for the Sebastian repository only,
+  "Contents: read". `WATCHER_REPO` (`owner/name`) overrides the repository.
+
+## Today strip
+
+The top of **Operations** is one line: tasks finished and failed today (UTC), spend against the fleet cap, and
+approvals waiting on you. It is green when nothing failed, spend is under the cap and nothing has waited over a day,
+and red otherwise. It uses `/api/operations`, `/api/spend` and `/api/approvals`, which the page already loads.

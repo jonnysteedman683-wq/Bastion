@@ -9,6 +9,10 @@
                           "daily": [30 UTC days, oldest first], "agents": [...], "caps": ...}
     GET /api/approvals -> {"source": ..., "approvals": [{task_id, title, ..., approve_command, reject_command}]},
                           oldest first. Read-only: the owner signs decisions with LinX on their own machine.
+    GET /api/checks    -> {"configured": bool, "checks": [{name, slug, status, last_ping, next_ping, ...}],
+                          "counts": {status: n}}, worst first, from Healthchecks.io (HEALTHCHECKS_API_KEY)
+    GET /api/watcher   -> {"configured": bool, "drafted_by": "grok"|"mechanical"|null, "reports": [...],
+                          "alerts": [...]}: who really wrote Sebastian's watcher reports (WATCHER_GITHUB_TOKEN)
     GET /*             -> the web app (web/dist), with index.html for client-side routes
 
 The browser only ever talks to this server. The ledger is read server-side:
@@ -32,10 +36,11 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from http.cookies import SimpleCookie
@@ -866,8 +871,228 @@ def _parse_int(value: str | None, default: int, low: int, high: int) -> int:
     return min(max(n, low), high)
 
 
-def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = None) -> type[BaseHTTPRequestHandler]:
+# --- Health view: Healthchecks.io dead-man checks (backlog G3c) ------------------------------
+
+HEALTHCHECKS_API = "https://healthchecks.io/api/v3/checks/"
+HEALTH_CACHE_SECONDS = 60
+HEALTH_TIMEOUT_SECONDS = 8.0
+MAX_HEALTH_BODY = 1_000_000
+CHECK_ORDER = ("down", "grace", "unknown", "new", "paused", "up")  # worst first
+
+# (url, headers) -> (status, body). HTTP errors are returned, not raised; network errors raise OSError.
+Fetch = Callable[[str, dict[str, str]], tuple[int, bytes]]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would carry the API key or token to another host."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+_HEALTH_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, headers=headers)  # noqa: S310 - fixed https URLs only
+    try:
+        with _HEALTH_OPENER.open(request, timeout=HEALTH_TIMEOUT_SECONDS) as resp:
+            return int(resp.status), resp.read(MAX_HEALTH_BODY)
+    except urllib.error.HTTPError as err:
+        return int(err.code), b""
+
+
+def _text(value: object, limit: int = 120) -> str:
+    return value[:limit] if isinstance(value, str) else ""
+
+
+def checks_report(env: Mapping[str, str], fetch: Fetch) -> dict[str, Any]:
+    """Every Healthchecks.io check, worst first. Only display fields pass: never a ping URL or the key."""
+    key = (env.get("HEALTHCHECKS_API_KEY") or "").strip()
+    if not key:
+        return {"configured": False, "checks": [], "counts": {}}
+    failed: dict[str, Any] = {"configured": True, "checks": [], "counts": {}}
+    try:
+        status, body = fetch(HEALTHCHECKS_API, {"X-Api-Key": key, "Accept": "application/json"})
+    except OSError:
+        return {**failed, "error": "Healthchecks.io unreachable"}
+    if status != 200:
+        return {**failed, "error": f"Healthchecks.io answered HTTP {status}"}
+    try:
+        raw = json.loads(body).get("checks")
+    except (ValueError, AttributeError):
+        raw = None
+    if not isinstance(raw, list):
+        return {**failed, "error": "Healthchecks.io sent an unexpected reply"}
+    checks: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        state = item.get("status")
+        grace = item.get("grace")
+        checks.append(
+            {
+                "name": _text(item.get("name")),
+                "slug": _text(item.get("slug")),
+                "status": state if state in CHECK_ORDER else "unknown",
+                "last_ping": _text(item.get("last_ping"), 40) or None,
+                "next_ping": _text(item.get("next_ping"), 40) or None,
+                "grace_seconds": grace if isinstance(grace, int) and not isinstance(grace, bool) else None,
+                "tags": _text(item.get("tags"), 200),
+            }
+        )
+    checks.sort(key=lambda c: (CHECK_ORDER.index(c["status"]), c["name"]))
+    counts: dict[str, int] = {}
+    for check in checks:
+        counts[check["status"]] = counts.get(check["status"], 0) + 1
+    return {"configured": True, "checks": checks, "counts": counts}
+
+
+# --- Health view: is Sebastian's watcher honest? (backlog G3d) --------------------------------
+# The watcher's reports are signed GROK-WATCHER, but when no Grok draft service answers it writes them itself
+# from commit messages and says so in open_questions. This reads its watch-state branch and says who wrote them.
+
+GITHUB_API = "https://api.github.com"
+DEFAULT_WATCHER_REPO = "jonnysteedman683-wq/Sebastian"
+WATCH_BRANCH = "watch-state"
+WATCH_REPORTS = 3  # newest reports read per refresh
+MAX_WATCH_SUMMARY = 200
+WATCH_STALE_AFTER = timedelta(hours=26)
+REPO_NAME = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+MECHANICAL = re.compile(r"Mechanical draft \((.{0,200}?)\):")
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def classify_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """One watcher report: who drafted it ("grok", "mechanical" or "no_change") and a short summary."""
+    summary = _text(report.get("summary"), MAX_WATCH_SUMMARY)
+    drafter, reason = "grok", ""
+    questions = report.get("open_questions")
+    for question in questions if isinstance(questions, list) else []:
+        match = MECHANICAL.match(question) if isinstance(question, str) else None
+        if match:
+            drafter, reason = "mechanical", match.group(1)
+            break
+    else:
+        if summary.startswith("No changes in last 24h"):
+            drafter = "no_change"
+    seq = report.get("seq")
+    return {
+        "seq": seq if isinstance(seq, int) else None,
+        "generated_at": _text(report.get("generated_at"), 40) or None,
+        "drafter": drafter,
+        "reason": reason,
+        "summary": summary,
+        "escalate": report.get("escalate") is True,
+    }
+
+
+def watcher_report(env: Mapping[str, str], fetch: Fetch, now: datetime) -> dict[str, Any]:
+    """The watcher's state and newest reports, with alerts for machine-written, stale or failing runs."""
+    cred = (env.get("WATCHER_GITHUB_TOKEN") or "").strip()
+    if not cred:
+        return {"configured": False, "reports": [], "alerts": []}
+    repo = (env.get("WATCHER_REPO") or DEFAULT_WATCHER_REPO).strip()
+    failed: dict[str, Any] = {"configured": True, "repo": repo, "reports": [], "alerts": []}
+    if not REPO_NAME.fullmatch(repo) or ".." in repo:
+        return {**failed, "repo": "", "error": "WATCHER_REPO must be owner/name"}
+    headers = {
+        "Authorization": "Bearer " + cred,
+        "Accept": "application/vnd.github.raw+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "bastion-command-centre",
+    }
+
+    def read(path: str) -> Any:
+        status, body = fetch(f"{GITHUB_API}/repos/{repo}/contents/{path}?ref={WATCH_BRANCH}", headers)
+        if status != 200:
+            raise LookupError(f"GitHub answered HTTP {status} for {path}")
+        return json.loads(body)
+
+    try:
+        state = read("state.json")
+    except OSError:
+        return {**failed, "error": "GitHub unreachable"}
+    except (LookupError, ValueError) as err:
+        return {**failed, "error": str(err) if isinstance(err, LookupError) else "state.json is not JSON"}
+    if not isinstance(state, dict):
+        return {**failed, "error": "state.json is not an object"}
+
+    head = state.get("seq")
+    reports = []
+    if isinstance(head, int) and not isinstance(head, bool):
+        for seq in range(head, max(head - WATCH_REPORTS, 0), -1):
+            try:
+                raw = read(f"reports/{seq:06d}.json")
+            except (OSError, LookupError, ValueError):
+                continue
+            if isinstance(raw, dict):
+                reports.append(classify_report(raw))
+
+    alerts = []
+    last_run = _text(state.get("last_run_at"), 40)
+    try:
+        ran = datetime.fromisoformat(last_run.replace("Z", "+00:00")) if last_run else None
+    except ValueError:
+        ran = None
+    if ran is None or now - ran > WATCH_STALE_AFTER:
+        alerts.append("Watcher has not run for over a day")
+    drafts = [r for r in reports if r["drafter"] != "no_change"]
+    if drafts and all(r["drafter"] == "mechanical" for r in drafts):
+        why = drafts[0]["reason"] or "no reason given"
+        alerts.append(f"Grok wrote none of the last {len(drafts)} reports: they are machine-written ({why})")
+    if failures := _count(state.get("grok_failures")):
+        alerts.append(f"Grok draft service failing for {failures} runs")
+    if failures := _count(state.get("delivery_failures")):
+        alerts.append(f"{failures} report {'delivery' if failures == 1 else 'deliveries'} failed")
+    if down := _text(state.get("coordinator_down_since"), 40):
+        alerts.append(f"Watcher coordinator down since {down}")
+    return {
+        "configured": True,
+        "repo": repo,
+        "last_run_at": last_run or None,
+        "drafted_by": drafts[0]["drafter"] if drafts else None,
+        "reports": reports,
+        "alerts": alerts,
+    }
+
+
+class HealthSources:
+    """The Health view's outside sources, each cached so the dashboard's polling never floods them."""
+
+    def __init__(
+        self, env: Mapping[str, str] | None = None, fetch: Fetch = http_get, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._env = dict(os.environ) if env is None else dict(env)
+        self._fetch = fetch
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def _cached(self, name: str, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        with self._lock:
+            hit = self._cache.get(name)
+            if hit is not None and self._clock() - hit[0] < HEALTH_CACHE_SECONDS:
+                return hit[1]
+            value = build()
+            self._cache[name] = (self._clock(), value)
+            return value
+
+    def checks(self) -> dict[str, Any]:
+        return self._cached("checks", lambda: checks_report(self._env, self._fetch))
+
+    def watcher(self) -> dict[str, Any]:
+        return self._cached("watcher", lambda: watcher_report(self._env, self._fetch, datetime.now(UTC)))
+
+
+def make_handler(
+    version: str, ledger: Ledger, static_dir: Path, auth: Any = None, health: HealthSources | None = None
+) -> type[BaseHTTPRequestHandler]:
     static_root = static_dir.resolve()
+    sources = health or HealthSources()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "bastion-command-centre"
@@ -925,6 +1150,14 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                         "approvals": [{**item, **linx_commands(item["task_id"])} for item in ledger.approvals()],
                     }
                 )
+            elif path == "/api/checks":
+                if self._current_user() is None:
+                    return
+                self._json(200, sources.checks())
+            elif path == "/api/watcher":
+                if self._current_user() is None:
+                    return
+                self._json(200, sources.watcher())
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:
@@ -1134,9 +1367,10 @@ def build_server(
     static_dir: Path = STATIC_DIR,
     auth: Auth | None = None,
     sources_path: Path | None = None,
+    health: HealthSources | None = None,
 ) -> ThreadingHTTPServer:
     merged = MergedLedger(ledger or ledger_from_env(), load_sources(sources_path))
-    handler = make_handler(version, merged, static_dir, auth or AuthClient.from_env())
+    handler = make_handler(version, merged, static_dir, auth or AuthClient.from_env(), health)
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

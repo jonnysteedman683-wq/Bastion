@@ -74,6 +74,7 @@ Exit: Jonny can see and decide everything waiting on him from the command centre
 - [x] O1 Approvals view: `GET /api/approvals` lists every task awaiting approval, oldest first, with a copyable `linx approve`/`linx reject` command (none for task ids unsafe to paste into a shell); flags anything waiting over a day. *Done when* a pending task on the ledger shows in the view with a working copy button.
 - [ ] O2 🔒 One-click decisions: the dashboard posts an unsigned `approval.intent` (new write-only role) and a LinX relay on the owner's PC signs it with the owner key. Needs S2 (Cloudflare Access) first. *Done when* clicking Approve lands a signed `approval.decision` on the ledger and the task leaves the view.
 - [x] O3 Kill switch panel: show `bastion.control` (halted, reason, since) as a banner and a copyable `linx halt`/`linx resume`. *Done when* a halt on the ledger shows the banner within 5 seconds.
+- [x] O4 Today strip: one line at the top of Operations with tasks finished and failed today (UTC), spend against the fleet cap, and approvals waiting (and over a day old), green when all clear. Built from data the page already loads; no new endpoint. *Done when* a failed task today turns the strip red.
 
 ## M6 · AI Hub
 Exit: any local AI can push events to Bastion, and the dashboard shows a unified mixed feed from all connected sources.

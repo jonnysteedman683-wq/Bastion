@@ -144,3 +144,9 @@ Manager first, then list it in `deploy.json`, or the deploy fails on the missing
   when every recent draft is machine-written, the watcher has not run for 26 hours, or its draft service, deliveries
   or coordinator are failing. Secret `WATCHER_GITHUB_TOKEN`: a fine-grained token for the Sebastian repository only,
   "Contents: read". `WATCHER_REPO` (`owner/name`) overrides the repository.
+
+## Today strip
+
+The top of **Operations** is one line: tasks finished and failed today (UTC), spend against the fleet cap, and
+approvals waiting on you. It is green when nothing failed, spend is under the cap and nothing has waited over a day,
+and red otherwise. It uses `/api/operations`, `/api/spend` and `/api/approvals`, which the page already loads.

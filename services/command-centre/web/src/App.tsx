@@ -10,6 +10,8 @@ import { CHECK_STYLE, DRAFTER_LABEL, checksHeadline, checksNeedAttention, watche
 
 import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
+import { formatUsd } from "@/lib/spend";
+import { todayIsClear, todaySummary, type Today } from "@/lib/today";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
 const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
@@ -89,7 +91,12 @@ export default function App() {
 
         {operations.data?.control.halted && <HaltBanner control={operations.data.control} now={now} />}
 
-        {view === "operations" && <Operations data={operations.data} now={now} />}
+        {view === "operations" && (
+          <>
+            <TodayStrip today={todaySummary(operations.data?.tasks, spend.data, approvals.data?.approvals, now)} />
+            <Operations data={operations.data} now={now} />
+          </>
+        )}
         {view === "health" && (
           <div className="grid gap-6 lg:grid-cols-2">
             <ChecksCard data={checks.data} error={checks.error} now={now} />
@@ -257,6 +264,45 @@ function WatcherCard({ data, error, now }: { data: WatcherResponse | null; error
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TodayStrip({ today }: { today: Today }) {
+  const clear = todayIsClear(today);
+  const cap = today.capUsd !== null ? ` of ${formatUsd(today.capUsd)}` : "";
+  const items: { label: string; value: string; bad?: boolean }[] = [
+    { label: "finished", value: String(today.finished) },
+    { label: "failed", value: String(today.failed), bad: today.failed > 0 },
+    {
+      label: "spent",
+      value: today.spendUsd === null ? "…" : formatUsd(today.spendUsd) + cap,
+      bad: today.capStatus === "over",
+    },
+    {
+      label: today.overdue ? `waiting on you (${today.overdue} over a day)` : "waiting on you",
+      value: String(today.waiting),
+      bad: today.overdue > 0,
+    },
+  ];
+  return (
+    <section
+      aria-label="Today"
+      className={cn(
+        "flex flex-wrap items-center gap-x-5 gap-y-1 rounded-md border px-3 py-2 text-sm",
+        clear ? "border-ok/40 bg-ok/5" : "border-destructive/40 bg-destructive/5",
+      )}
+    >
+      <span className="flex items-center gap-1.5 font-medium">
+        <span className={cn("size-2 rounded-full", clear ? "bg-ok" : "bg-destructive")} aria-hidden />
+        Today {clear ? "· all clear" : "· needs a look"}
+      </span>
+      {items.map((item) => (
+        <span key={item.label} className="text-muted-foreground">
+          <span className={cn("font-medium tabular-nums text-foreground", item.bad && "text-destructive")}>{item.value}</span>{" "}
+          {item.label}
+        </span>
+      ))}
+    </section>
   );
 }
 

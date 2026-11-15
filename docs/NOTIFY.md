@@ -25,7 +25,7 @@ Exit 1 on a network error means the message *may* have been delivered, so a call
    NTFY_TOPIC=<your topic> python -m tools.notify send --title "Bastion" --message "Phone is connected"
    ```
 
-## Not done yet
+## Who calls it
 
-G1d-2 (🔒) runs the cap check on a schedule, halts an agent over its cap and calls this tool. It needs a workflow under
-`.github/`, which agents may not change.
+The hourly spend-cap check (`.github/workflows/caps.yml`, G1d-2) sends an urgent alert for each cap breach. See
+[CAPS.md](CAPS.md).

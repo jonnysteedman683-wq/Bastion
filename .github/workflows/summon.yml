@@ -15,6 +15,7 @@
 # Secrets (only their sha256 is stored in the ledger's unisync_tokens):
 #   UNISYNC_ORCHESTRATOR_TOKEN  lestinxor, may post task.request only
 #   UNISYNC_AGENT_TOKEN         sebastian, may post task.claim, task.result, task.failed only
+#   LEDGER_DSN                  optional, read-only bastion_reader URL: refuse the summon when over a spend cap (G1d-2)
 #   LANGFUSE_PUBLIC_KEY         optional, with LANGFUSE_SECRET_KEY: trace demo runs to Langfuse (G1c-3)
 #   LANGFUSE_SECRET_KEY
 # Variable (not secret): LANGFUSE_HOST, optional https origin; default https://cloud.langfuse.com
@@ -79,6 +80,17 @@ jobs:
             echo "::error::Set the UNISYNC_ORCHESTRATOR_TOKEN and UNISYNC_AGENT_TOKEN repository secrets."
             exit 1
           fi
+
+      - name: Check the spend caps
+        env:
+          LEDGER_DSN: ${{ secrets.LEDGER_DSN }}
+        run: |
+          if [[ -z "$LEDGER_DSN" ]]; then
+            echo "::warning::LEDGER_DSN is not set: spend caps are not enforced (docs/CAPS.md)."
+            exit 0
+          fi
+          python -m pip install --quiet --require-hashes -r services/command-centre/requirements.txt
+          python -m tools.caps gate --agent "$AGENT"
 
       - name: Install Lestinxor and Sebastian (pinned commits, no dependencies)
         run: |

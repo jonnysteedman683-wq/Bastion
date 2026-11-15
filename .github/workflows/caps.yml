@@ -1,0 +1,82 @@
+# Spend caps (G1d-2): every hour, read today's spend against services/command-centre/caps.json and push an urgent
+# phone alert (ntfy) for each agent, or the whole fleet, over its daily cap. One alert per breach per UTC day.
+#
+# Enforcement itself is in summon.yml: `python -m tools.caps gate` refuses to summon an agent that is over, so an
+# agent over its cap stays paused until 00:00 UTC (10:00 Brisbane). The fleet-wide kill switch (`linx halt`) stays
+# with the owner key on the owner's PC; nothing here signs anything.
+#
+# Secrets:
+#   LEDGER_DSN   postgresql:// URL of the read-only bastion_reader role (same value the command centre uses)
+#   NTFY_TOPIC   the phone's ntfy topic (docs/NOTIFY.md)
+#   NTFY_TOKEN   optional, for a protected topic
+
+name: Spend caps
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caps
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check today's spend against the caps
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check the secrets are set
+        env:
+          LEDGER_DSN: ${{ secrets.LEDGER_DSN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [[ -z "$LEDGER_DSN" || -z "$NTFY_TOPIC" ]]; then
+            echo "::error::Set the LEDGER_DSN and NTFY_TOPIC repository secrets (docs/CAPS.md)."
+            exit 1
+          fi
+
+      - name: Install the ledger driver (pinned, hashed)
+        run: python -m pip install --quiet --require-hashes -r services/command-centre/requirements.txt
+
+      - name: Today's date (UTC)
+        id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      # Remembers which breaches already buzzed today, so an hourly check alerts once per breach per day.
+      - name: Restore today's alerts
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/caps-alerted.json
+          key: caps-alerted-${{ steps.day.outputs.day }}-${{ github.run_id }}
+          restore-keys: caps-alerted-${{ steps.day.outputs.day }}-
+
+      - name: Check and alert
+        env:
+          LEDGER_DSN: ${{ secrets.LEDGER_DSN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+        run: |
+          python -m tools.caps check --notify --alerted "$RUNNER_TEMP/caps-alerted.json" \
+            --summary "$GITHUB_STEP_SUMMARY" --click "$RUN_URL"
+
+      - name: Save today's alerts
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/caps-alerted.json
+          key: caps-alerted-${{ steps.day.outputs.day }}-${{ github.run_id }}

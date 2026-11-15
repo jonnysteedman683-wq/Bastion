@@ -1,5 +1,5 @@
 {
-  "_comment": "Spend caps the command centre shows against (USD per UTC day). Display only until G1d enforces them.",
+  "_comment": "Spend caps in USD per UTC day. Shown in the Spend view and enforced by tools.caps (docs/CAPS.md).",
   "daily_usd": 5.0,
   "default_agent_daily_usd": 2.0,
   "agent_daily_usd": {}

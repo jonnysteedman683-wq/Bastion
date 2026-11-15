@@ -268,6 +268,15 @@ class DemoLedger:
                 "detail": "Owner approval required",
             },
             {
+                "task_id": "demo-failed",
+                "title": "Pin the python base image",
+                "status": "failed",
+                "agent": "Jules",
+                "updated_ts": now,
+                "finished_ts": now,
+                "detail": "pip install timed out after 300s",
+            },
+            {
                 "task_id": "demo-complete",
                 "title": "Run nightly demo",
                 "status": "done",
@@ -280,7 +289,10 @@ class DemoLedger:
         ]
         return {
             "generated_at": now,
-            "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
+            "attention": [
+                {"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"},
+                {"kind": "failed", "title": "Pin the python base image", "detail": "pip install timed out after 300s"},
+            ],
             "tasks": tasks,
             "pr_report": None,
             "completions": [
@@ -707,6 +719,140 @@ class MergedLedger:
 
     def spend(self, since: str) -> list[dict[str, object]]:
         return self._base.spend(since)
+
+
+# --- Failures ------------------------------------------------------------------------------
+# Failed runs grouped by agent and error signature, so a repeat failure stands out (the I2 failure loop).
+
+FAILURE_WINDOW_DAYS = 7
+FAILURE_RECURRING_AT = 3
+MAX_FAILURE_GROUPS = 50
+MAX_SIGNATURE = 80
+MAX_FAILURE_REASON = 200
+FAILURE_EVENT_SUFFIXES = (".failed", ".error")
+# Turn the parts of a reason that change between runs into placeholders. Order matters.
+_SIGNATURE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"https?://\S+"), "<url>"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<id>"),
+    (re.compile(r"(?:/[\w.-]+){2,}"), "<path>"),
+    (re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"), "<id>"),
+    (re.compile(r"\d+(?:\.\d+)?"), "#"),
+    (re.compile(r"\s+"), " "),
+)
+
+
+def failure_signature(reason: str) -> str:
+    """The stable part of a failure reason: the same fault on two runs gives the same signature."""
+    text = reason.strip().lower()
+    for pattern, placeholder in _SIGNATURE_RULES:
+        text = pattern.sub(placeholder, text)
+    return text.strip()[:MAX_SIGNATURE] or "(no reason given)"
+
+
+def _when(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _tasks_of(operations: Mapping[str, object]) -> list[dict[str, str]]:
+    tasks = operations.get("tasks")
+    return [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+
+
+def failures_report(tasks: list[dict[str, str]], events: list[Event], now: datetime) -> dict[str, object]:
+    """Failed tasks and failed local runs in the last week, by agent and by (agent, signature).
+
+    ``task.failed`` events are skipped because their task already carries the failure.
+    """
+    since = now - timedelta(days=FAILURE_WINDOW_DAYS)
+    day_ago = now - timedelta(days=1)
+    failures: list[dict[str, Any]] = []
+    finished: dict[str, int] = {}
+    for task in tasks:
+        status = task.get("status", "")
+        ts = _when(task.get("finished_ts") or task.get("updated_ts"))
+        agent = _text(task.get("agent") or "unknown", 60)
+        if ts is None or ts < since or status not in {"done", "failed"}:
+            continue
+        finished[agent] = finished.get(agent, 0) + 1
+        if status == "failed":
+            failures.append(
+                {
+                    "agent": agent,
+                    "at": ts,
+                    "title": _text(task.get("title", "")),
+                    "reason": str(task.get("detail") or ""),
+                    "run_url": str(task.get("run_url") or ""),
+                    "trace_url": safe_trace_url(task.get("trace_url")),
+                    "from_task": True,
+                }
+            )
+    for event in events:
+        ts = _when(event.ts)
+        if event.kind == "task.failed" or not event.kind.endswith(FAILURE_EVENT_SUFFIXES) or ts is None or ts < since:
+            continue
+        failures.append(
+            {
+                "agent": _text(event.agent, 60),
+                "at": ts,
+                "title": _text(event.kind),
+                "reason": event.summary,
+                "run_url": "",
+                "trace_url": "",
+                "from_task": False,
+            }
+        )
+
+    def stamp(ts: datetime) -> str:
+        return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for failure in sorted(failures, key=lambda f: f["at"], reverse=True):
+        groups.setdefault((failure["agent"], failure_signature(failure["reason"])), []).append(failure)
+    grouped = []
+    for (agent, signature), members in groups.items():
+        latest = members[0]
+        grouped.append(
+            {
+                "agent": agent,
+                "signature": signature,
+                "count": len(members),
+                "recurring": len(members) >= FAILURE_RECURRING_AT,
+                "first_ts": stamp(members[-1]["at"]),
+                "last_ts": stamp(latest["at"]),
+                "example": {"title": latest["title"], "reason": _text(latest["reason"], MAX_FAILURE_REASON)},
+                "run_url": next((m["run_url"] for m in members if m["run_url"]), ""),
+                "trace_url": next((m["trace_url"] for m in members if m["trace_url"]), ""),
+            }
+        )
+    grouped.sort(key=lambda g: (g["count"], g["last_ts"]), reverse=True)
+
+    per_agent: dict[str, dict[str, Any]] = {}
+    for failure in failures:
+        row = per_agent.setdefault(failure["agent"], {"agent": failure["agent"], "last_24h": 0, "last_7d": 0})
+        row["last_7d"] += 1
+        row["last_24h"] += failure["at"] >= day_ago
+    for row in per_agent.values():
+        done = finished.get(row["agent"], 0)
+        failed_tasks = sum(1 for f in failures if f["agent"] == row["agent"] and f["from_task"])
+        row["rate"] = round(failed_tasks / done, 3) if done else None
+    agents = sorted(per_agent.values(), key=lambda r: (r["last_7d"], r["last_24h"]), reverse=True)
+    return {
+        "generated_at": stamp(now),
+        "window_days": FAILURE_WINDOW_DAYS,
+        "totals": {
+            "last_24h": sum(r["last_24h"] for r in agents),
+            "last_7d": len(failures),
+            "recurring": sum(1 for g in grouped if g["recurring"]),
+        },
+        "agents": agents,
+        "groups": grouped[:MAX_FAILURE_GROUPS],
+    }
 
 
 # --- Spend ---------------------------------------------------------------------------------
@@ -1148,6 +1294,19 @@ def make_handler(
                     lambda: {
                         "source": ledger.source,
                         "approvals": [{**item, **linx_commands(item["task_id"])} for item in ledger.approvals()],
+                    }
+                )
+            elif path == "/api/failures":
+                if self._current_user() is None:
+                    return
+                self._ledger_call(
+                    lambda: {
+                        "source": ledger.source,
+                        **failures_report(
+                            _tasks_of(ledger.operations()),
+                            ledger.events(0, MAX_LIMIT),
+                            datetime.now(UTC),
+                        ),
                     }
                 )
             elif path == "/api/checks":

@@ -9,6 +9,10 @@
                           "daily": [30 UTC days, oldest first], "agents": [...], "caps": ...}
     GET /api/approvals -> {"source": ..., "approvals": [{task_id, title, ..., approve_command, reject_command}]},
                           oldest first. Read-only: the owner signs decisions with LinX on their own machine.
+    GET /api/checks    -> {"configured": bool, "checks": [{name, slug, status, last_ping, next_ping, ...}],
+                          "counts": {status: n}}, worst first, from Healthchecks.io (HEALTHCHECKS_API_KEY)
+    GET /api/watcher   -> {"configured": bool, "drafted_by": "grok"|"mechanical"|null, "reports": [...],
+                          "alerts": [...]}: who really wrote Sebastian's watcher reports (WATCHER_GITHUB_TOKEN)
     GET /*             -> the web app (web/dist), with index.html for client-side routes
 
 The browser only ever talks to this server. The ledger is read server-side:
@@ -32,10 +36,11 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from http.cookies import SimpleCookie
@@ -263,6 +268,15 @@ class DemoLedger:
                 "detail": "Owner approval required",
             },
             {
+                "task_id": "demo-failed",
+                "title": "Pin the python base image",
+                "status": "failed",
+                "agent": "Jules",
+                "updated_ts": now,
+                "finished_ts": now,
+                "detail": "pip install timed out after 300s",
+            },
+            {
                 "task_id": "demo-complete",
                 "title": "Run nightly demo",
                 "status": "done",
@@ -275,7 +289,10 @@ class DemoLedger:
         ]
         return {
             "generated_at": now,
-            "attention": [{"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"}],
+            "attention": [
+                {"kind": "awaiting_approval", "title": "Deploy hello", "detail": "Owner approval required"},
+                {"kind": "failed", "title": "Pin the python base image", "detail": "pip install timed out after 300s"},
+            ],
             "tasks": tasks,
             "pr_report": None,
             "completions": [
@@ -704,6 +721,140 @@ class MergedLedger:
         return self._base.spend(since)
 
 
+# --- Failures ------------------------------------------------------------------------------
+# Failed runs grouped by agent and error signature, so a repeat failure stands out (the I2 failure loop).
+
+FAILURE_WINDOW_DAYS = 7
+FAILURE_RECURRING_AT = 3
+MAX_FAILURE_GROUPS = 50
+MAX_SIGNATURE = 80
+MAX_FAILURE_REASON = 200
+FAILURE_EVENT_SUFFIXES = (".failed", ".error")
+# Turn the parts of a reason that change between runs into placeholders. Order matters.
+_SIGNATURE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"https?://\S+"), "<url>"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<id>"),
+    (re.compile(r"(?:/[\w.-]+){2,}"), "<path>"),
+    (re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"), "<id>"),
+    (re.compile(r"\d+(?:\.\d+)?"), "#"),
+    (re.compile(r"\s+"), " "),
+)
+
+
+def failure_signature(reason: str) -> str:
+    """The stable part of a failure reason: the same fault on two runs gives the same signature."""
+    text = reason.strip().lower()
+    for pattern, placeholder in _SIGNATURE_RULES:
+        text = pattern.sub(placeholder, text)
+    return text.strip()[:MAX_SIGNATURE] or "(no reason given)"
+
+
+def _when(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _tasks_of(operations: Mapping[str, object]) -> list[dict[str, str]]:
+    tasks = operations.get("tasks")
+    return [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+
+
+def failures_report(tasks: list[dict[str, str]], events: list[Event], now: datetime) -> dict[str, object]:
+    """Failed tasks and failed local runs in the last week, by agent and by (agent, signature).
+
+    ``task.failed`` events are skipped because their task already carries the failure.
+    """
+    since = now - timedelta(days=FAILURE_WINDOW_DAYS)
+    day_ago = now - timedelta(days=1)
+    failures: list[dict[str, Any]] = []
+    finished: dict[str, int] = {}
+    for task in tasks:
+        status = task.get("status", "")
+        ts = _when(task.get("finished_ts") or task.get("updated_ts"))
+        agent = _text(task.get("agent") or "unknown", 60)
+        if ts is None or ts < since or status not in {"done", "failed"}:
+            continue
+        finished[agent] = finished.get(agent, 0) + 1
+        if status == "failed":
+            failures.append(
+                {
+                    "agent": agent,
+                    "at": ts,
+                    "title": _text(task.get("title", "")),
+                    "reason": str(task.get("detail") or ""),
+                    "run_url": str(task.get("run_url") or ""),
+                    "trace_url": safe_trace_url(task.get("trace_url")),
+                    "from_task": True,
+                }
+            )
+    for event in events:
+        ts = _when(event.ts)
+        if event.kind == "task.failed" or not event.kind.endswith(FAILURE_EVENT_SUFFIXES) or ts is None or ts < since:
+            continue
+        failures.append(
+            {
+                "agent": _text(event.agent, 60),
+                "at": ts,
+                "title": _text(event.kind),
+                "reason": event.summary,
+                "run_url": "",
+                "trace_url": "",
+                "from_task": False,
+            }
+        )
+
+    def stamp(ts: datetime) -> str:
+        return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for failure in sorted(failures, key=lambda f: f["at"], reverse=True):
+        groups.setdefault((failure["agent"], failure_signature(failure["reason"])), []).append(failure)
+    grouped = []
+    for (agent, signature), members in groups.items():
+        latest = members[0]
+        grouped.append(
+            {
+                "agent": agent,
+                "signature": signature,
+                "count": len(members),
+                "recurring": len(members) >= FAILURE_RECURRING_AT,
+                "first_ts": stamp(members[-1]["at"]),
+                "last_ts": stamp(latest["at"]),
+                "example": {"title": latest["title"], "reason": _text(latest["reason"], MAX_FAILURE_REASON)},
+                "run_url": next((m["run_url"] for m in members if m["run_url"]), ""),
+                "trace_url": next((m["trace_url"] for m in members if m["trace_url"]), ""),
+            }
+        )
+    grouped.sort(key=lambda g: (g["count"], g["last_ts"]), reverse=True)
+
+    per_agent: dict[str, dict[str, Any]] = {}
+    for failure in failures:
+        row = per_agent.setdefault(failure["agent"], {"agent": failure["agent"], "last_24h": 0, "last_7d": 0})
+        row["last_7d"] += 1
+        row["last_24h"] += failure["at"] >= day_ago
+    for row in per_agent.values():
+        done = finished.get(row["agent"], 0)
+        failed_tasks = sum(1 for f in failures if f["agent"] == row["agent"] and f["from_task"])
+        row["rate"] = round(failed_tasks / done, 3) if done else None
+    agents = sorted(per_agent.values(), key=lambda r: (r["last_7d"], r["last_24h"]), reverse=True)
+    return {
+        "generated_at": stamp(now),
+        "window_days": FAILURE_WINDOW_DAYS,
+        "totals": {
+            "last_24h": sum(r["last_24h"] for r in agents),
+            "last_7d": len(failures),
+            "recurring": sum(1 for g in grouped if g["recurring"]),
+        },
+        "agents": agents,
+        "groups": grouped[:MAX_FAILURE_GROUPS],
+    }
+
+
 # --- Spend ---------------------------------------------------------------------------------
 
 
@@ -866,8 +1017,228 @@ def _parse_int(value: str | None, default: int, low: int, high: int) -> int:
     return min(max(n, low), high)
 
 
-def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = None) -> type[BaseHTTPRequestHandler]:
+# --- Health view: Healthchecks.io dead-man checks (backlog G3c) ------------------------------
+
+HEALTHCHECKS_API = "https://healthchecks.io/api/v3/checks/"
+HEALTH_CACHE_SECONDS = 60
+HEALTH_TIMEOUT_SECONDS = 8.0
+MAX_HEALTH_BODY = 1_000_000
+CHECK_ORDER = ("down", "grace", "unknown", "new", "paused", "up")  # worst first
+
+# (url, headers) -> (status, body). HTTP errors are returned, not raised; network errors raise OSError.
+Fetch = Callable[[str, dict[str, str]], tuple[int, bytes]]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would carry the API key or token to another host."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+_HEALTH_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, headers=headers)  # noqa: S310 - fixed https URLs only
+    try:
+        with _HEALTH_OPENER.open(request, timeout=HEALTH_TIMEOUT_SECONDS) as resp:
+            return int(resp.status), resp.read(MAX_HEALTH_BODY)
+    except urllib.error.HTTPError as err:
+        return int(err.code), b""
+
+
+def _text(value: object, limit: int = 120) -> str:
+    return value[:limit] if isinstance(value, str) else ""
+
+
+def checks_report(env: Mapping[str, str], fetch: Fetch) -> dict[str, Any]:
+    """Every Healthchecks.io check, worst first. Only display fields pass: never a ping URL or the key."""
+    key = (env.get("HEALTHCHECKS_API_KEY") or "").strip()
+    if not key:
+        return {"configured": False, "checks": [], "counts": {}}
+    failed: dict[str, Any] = {"configured": True, "checks": [], "counts": {}}
+    try:
+        status, body = fetch(HEALTHCHECKS_API, {"X-Api-Key": key, "Accept": "application/json"})
+    except OSError:
+        return {**failed, "error": "Healthchecks.io unreachable"}
+    if status != 200:
+        return {**failed, "error": f"Healthchecks.io answered HTTP {status}"}
+    try:
+        raw = json.loads(body).get("checks")
+    except (ValueError, AttributeError):
+        raw = None
+    if not isinstance(raw, list):
+        return {**failed, "error": "Healthchecks.io sent an unexpected reply"}
+    checks: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        state = item.get("status")
+        grace = item.get("grace")
+        checks.append(
+            {
+                "name": _text(item.get("name")),
+                "slug": _text(item.get("slug")),
+                "status": state if state in CHECK_ORDER else "unknown",
+                "last_ping": _text(item.get("last_ping"), 40) or None,
+                "next_ping": _text(item.get("next_ping"), 40) or None,
+                "grace_seconds": grace if isinstance(grace, int) and not isinstance(grace, bool) else None,
+                "tags": _text(item.get("tags"), 200),
+            }
+        )
+    checks.sort(key=lambda c: (CHECK_ORDER.index(c["status"]), c["name"]))
+    counts: dict[str, int] = {}
+    for check in checks:
+        counts[check["status"]] = counts.get(check["status"], 0) + 1
+    return {"configured": True, "checks": checks, "counts": counts}
+
+
+# --- Health view: is Sebastian's watcher honest? (backlog G3d) --------------------------------
+# The watcher's reports are signed GROK-WATCHER, but when no Grok draft service answers it writes them itself
+# from commit messages and says so in open_questions. This reads its watch-state branch and says who wrote them.
+
+GITHUB_API = "https://api.github.com"
+DEFAULT_WATCHER_REPO = "jonnysteedman683-wq/Sebastian"
+WATCH_BRANCH = "watch-state"
+WATCH_REPORTS = 3  # newest reports read per refresh
+MAX_WATCH_SUMMARY = 200
+WATCH_STALE_AFTER = timedelta(hours=26)
+REPO_NAME = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+MECHANICAL = re.compile(r"Mechanical draft \((.{0,200}?)\):")
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def classify_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """One watcher report: who drafted it ("grok", "mechanical" or "no_change") and a short summary."""
+    summary = _text(report.get("summary"), MAX_WATCH_SUMMARY)
+    drafter, reason = "grok", ""
+    questions = report.get("open_questions")
+    for question in questions if isinstance(questions, list) else []:
+        match = MECHANICAL.match(question) if isinstance(question, str) else None
+        if match:
+            drafter, reason = "mechanical", match.group(1)
+            break
+    else:
+        if summary.startswith("No changes in last 24h"):
+            drafter = "no_change"
+    seq = report.get("seq")
+    return {
+        "seq": seq if isinstance(seq, int) else None,
+        "generated_at": _text(report.get("generated_at"), 40) or None,
+        "drafter": drafter,
+        "reason": reason,
+        "summary": summary,
+        "escalate": report.get("escalate") is True,
+    }
+
+
+def watcher_report(env: Mapping[str, str], fetch: Fetch, now: datetime) -> dict[str, Any]:
+    """The watcher's state and newest reports, with alerts for machine-written, stale or failing runs."""
+    cred = (env.get("WATCHER_GITHUB_TOKEN") or "").strip()
+    if not cred:
+        return {"configured": False, "reports": [], "alerts": []}
+    repo = (env.get("WATCHER_REPO") or DEFAULT_WATCHER_REPO).strip()
+    failed: dict[str, Any] = {"configured": True, "repo": repo, "reports": [], "alerts": []}
+    if not REPO_NAME.fullmatch(repo) or ".." in repo:
+        return {**failed, "repo": "", "error": "WATCHER_REPO must be owner/name"}
+    headers = {
+        "Authorization": "Bearer " + cred,
+        "Accept": "application/vnd.github.raw+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "bastion-command-centre",
+    }
+
+    def read(path: str) -> Any:
+        status, body = fetch(f"{GITHUB_API}/repos/{repo}/contents/{path}?ref={WATCH_BRANCH}", headers)
+        if status != 200:
+            raise LookupError(f"GitHub answered HTTP {status} for {path}")
+        return json.loads(body)
+
+    try:
+        state = read("state.json")
+    except OSError:
+        return {**failed, "error": "GitHub unreachable"}
+    except (LookupError, ValueError) as err:
+        return {**failed, "error": str(err) if isinstance(err, LookupError) else "state.json is not JSON"}
+    if not isinstance(state, dict):
+        return {**failed, "error": "state.json is not an object"}
+
+    head = state.get("seq")
+    reports = []
+    if isinstance(head, int) and not isinstance(head, bool):
+        for seq in range(head, max(head - WATCH_REPORTS, 0), -1):
+            try:
+                raw = read(f"reports/{seq:06d}.json")
+            except (OSError, LookupError, ValueError):
+                continue
+            if isinstance(raw, dict):
+                reports.append(classify_report(raw))
+
+    alerts = []
+    last_run = _text(state.get("last_run_at"), 40)
+    try:
+        ran = datetime.fromisoformat(last_run.replace("Z", "+00:00")) if last_run else None
+    except ValueError:
+        ran = None
+    if ran is None or now - ran > WATCH_STALE_AFTER:
+        alerts.append("Watcher has not run for over a day")
+    drafts = [r for r in reports if r["drafter"] != "no_change"]
+    if drafts and all(r["drafter"] == "mechanical" for r in drafts):
+        why = drafts[0]["reason"] or "no reason given"
+        alerts.append(f"Grok wrote none of the last {len(drafts)} reports: they are machine-written ({why})")
+    if failures := _count(state.get("grok_failures")):
+        alerts.append(f"Grok draft service failing for {failures} runs")
+    if failures := _count(state.get("delivery_failures")):
+        alerts.append(f"{failures} report {'delivery' if failures == 1 else 'deliveries'} failed")
+    if down := _text(state.get("coordinator_down_since"), 40):
+        alerts.append(f"Watcher coordinator down since {down}")
+    return {
+        "configured": True,
+        "repo": repo,
+        "last_run_at": last_run or None,
+        "drafted_by": drafts[0]["drafter"] if drafts else None,
+        "reports": reports,
+        "alerts": alerts,
+    }
+
+
+class HealthSources:
+    """The Health view's outside sources, each cached so the dashboard's polling never floods them."""
+
+    def __init__(
+        self, env: Mapping[str, str] | None = None, fetch: Fetch = http_get, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._env = dict(os.environ) if env is None else dict(env)
+        self._fetch = fetch
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def _cached(self, name: str, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        with self._lock:
+            hit = self._cache.get(name)
+            if hit is not None and self._clock() - hit[0] < HEALTH_CACHE_SECONDS:
+                return hit[1]
+            value = build()
+            self._cache[name] = (self._clock(), value)
+            return value
+
+    def checks(self) -> dict[str, Any]:
+        return self._cached("checks", lambda: checks_report(self._env, self._fetch))
+
+    def watcher(self) -> dict[str, Any]:
+        return self._cached("watcher", lambda: watcher_report(self._env, self._fetch, datetime.now(UTC)))
+
+
+def make_handler(
+    version: str, ledger: Ledger, static_dir: Path, auth: Any = None, health: HealthSources | None = None
+) -> type[BaseHTTPRequestHandler]:
     static_root = static_dir.resolve()
+    sources = health or HealthSources()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "bastion-command-centre"
@@ -925,6 +1296,27 @@ def make_handler(version: str, ledger: Ledger, static_dir: Path, auth: Any = Non
                         "approvals": [{**item, **linx_commands(item["task_id"])} for item in ledger.approvals()],
                     }
                 )
+            elif path == "/api/failures":
+                if self._current_user() is None:
+                    return
+                self._ledger_call(
+                    lambda: {
+                        "source": ledger.source,
+                        **failures_report(
+                            _tasks_of(ledger.operations()),
+                            ledger.events(0, MAX_LIMIT),
+                            datetime.now(UTC),
+                        ),
+                    }
+                )
+            elif path == "/api/checks":
+                if self._current_user() is None:
+                    return
+                self._json(200, sources.checks())
+            elif path == "/api/watcher":
+                if self._current_user() is None:
+                    return
+                self._json(200, sources.watcher())
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:
@@ -1134,9 +1526,10 @@ def build_server(
     static_dir: Path = STATIC_DIR,
     auth: Auth | None = None,
     sources_path: Path | None = None,
+    health: HealthSources | None = None,
 ) -> ThreadingHTTPServer:
     merged = MergedLedger(ledger or ledger_from_env(), load_sources(sources_path))
-    handler = make_handler(version, merged, static_dir, auth or AuthClient.from_env())
+    handler = make_handler(version, merged, static_dir, auth or AuthClient.from_env(), health)
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

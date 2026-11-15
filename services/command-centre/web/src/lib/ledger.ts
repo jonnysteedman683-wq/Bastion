@@ -26,6 +26,7 @@ export type OperationTask = {
   status: string;
   agent: string;
   updated_ts: string;
+  finished_ts?: string;
   detail?: string;
   run_url?: string;
   trace_url?: string;

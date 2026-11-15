@@ -1,0 +1,213 @@
+# Summon a task (S4): give Sebastian a job in plain words on one of your repos. It does the work with a real model
+# and opens a draft PR for you to review. Start it from Actions -> Summon task -> Run.
+#
+#   1. tools.taskpr check   refuses an empty, oversized or front-matter task, or a repo off the list
+#   2. tools.caps gate      refuses when Sebastian or the fleet is over today's spend cap (docs/CAPS.md)
+#   3. lestinxor posts task.request; sebastian claims it (both show in the command centre)
+#   4. sebastian run        works in a fresh checkout of the repo with file tools only: no shell, no network tools,
+#                           --unattended so every gated action is denied. It never sees the publishing token.
+#   5. tools.taskpr publish commits any changes to sebastian/<task id>, pushes and opens a DRAFT PR. Changes under
+#                           .github/ are refused.
+#   6. sebastian posts task.result (with the PR link) or task.failed, with its token usage and Langfuse trace
+#
+# Model: any OpenAI-compatible endpoint, set in Settings -> Secrets and variables -> Actions (docs/SUMMON_TASK.md).
+#   Variables: SEBASTIAN_BASE_URL (e.g. https://generativelanguage.googleapis.com/v1beta/openai), SEBASTIAN_MODEL
+#   Secret:    SEBASTIAN_MODEL_KEY
+# Other secrets:
+#   TASKPR_TOKEN                fine-grained: Contents + Pull requests write on the listed repos; NO Workflows permission
+#   UNISYNC_ORCHESTRATOR_TOKEN  lestinxor, task.request only
+#   UNISYNC_AGENT_TOKEN         sebastian, task.claim / task.result / task.failed only
+#   LEDGER_DSN                  optional, read-only: enforces the spend caps
+#   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY  optional: a trace per run
+
+name: Summon task
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: What Sebastian should do, in plain words (max 2000 characters)
+        required: true
+      repo:
+        description: Which repository to work on
+        type: choice
+        options:
+          - jonnysteedman683-wq/Sebastian
+          - jonnysteedman683-wq/Bastion
+          - jonnysteedman683-wq/LESTINXOR-AGENT
+          - jonnysteedman683-wq/O0
+          - jonnysteedman683-wq/Omniordial
+          - jonnysteedman683-wq/Sentinel
+        default: jonnysteedman683-wq/Sebastian
+      max_steps:
+        description: Most tool steps Sebastian may take
+        type: choice
+        options: ["15", "25", "40"]
+        default: "25"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: summon
+  cancel-in-progress: false
+
+jobs:
+  task:
+    name: Sebastian works on ${{ inputs.repo }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AGENT: sebastian
+      MODE: task
+      UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
+      SEBASTIAN_SHA: 7d6be7f4ae2190dd628debe1e0d69aaa1631f811  # B79: run --usage-out --langfuse
+      TASK: ${{ inputs.task }}
+      REPO: ${{ inputs.repo }}
+      SEBASTIAN_MODEL: ${{ vars.SEBASTIAN_MODEL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check the task, repository and setup
+        env:
+          BASE_URL: ${{ vars.SEBASTIAN_BASE_URL }}
+          MODEL_KEY: ${{ secrets.SEBASTIAN_MODEL_KEY }}
+          PR_TOKEN: ${{ secrets.TASKPR_TOKEN }}
+          ORCHESTRATOR: ${{ secrets.UNISYNC_ORCHESTRATOR_TOKEN }}
+          WORKER: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+        run: |
+          python -m tools.taskpr check --task "$TASK" --repo "$REPO"
+          missing=()
+          [[ -n "$BASE_URL" ]] || missing+=("variable SEBASTIAN_BASE_URL")
+          [[ -n "$SEBASTIAN_MODEL" ]] || missing+=("variable SEBASTIAN_MODEL")
+          [[ -n "$MODEL_KEY" ]] || missing+=("secret SEBASTIAN_MODEL_KEY")
+          [[ -n "$PR_TOKEN" ]] || missing+=("secret TASKPR_TOKEN")
+          [[ -n "$ORCHESTRATOR" && -n "$WORKER" ]] || missing+=("secrets UNISYNC_ORCHESTRATOR_TOKEN/UNISYNC_AGENT_TOKEN")
+          if (( ${#missing[@]} )); then
+            printf '::error::Missing %s (docs/SUMMON_TASK.md)\n' "${missing[@]}"
+            exit 1
+          fi
+
+      - name: Check the spend caps
+        env:
+          LEDGER_DSN: ${{ secrets.LEDGER_DSN }}
+        run: |
+          if [[ -z "$LEDGER_DSN" ]]; then
+            echo "::warning::LEDGER_DSN is not set: spend caps are not enforced (docs/CAPS.md)."
+            exit 0
+          fi
+          python -m pip install --quiet --require-hashes -r services/command-centre/requirements.txt
+          python -m tools.caps gate --agent "$AGENT"
+
+      - name: Install Lestinxor and Sebastian (pinned commits, no dependencies)
+        run: |
+          python -m pip install --quiet --no-deps \
+            "lestinxor @ git+https://github.com/jonnysteedman683-wq/LESTINXOR-AGENT.git@${LESTINXOR_SHA}" \
+            "sebastian @ git+https://github.com/jonnysteedman683-wq/Sebastian.git@${SEBASTIAN_SHA}"
+
+      - name: Post the task (lestinxor)
+        id: request
+        env:
+          UNISYNC_ORCHESTRATOR_TOKEN: ${{ secrets.UNISYNC_ORCHESTRATOR_TOKEN }}
+        run: |
+          title="Task on ${REPO#*/}: ${TASK:0:80}"
+          tid=$(python -m tools.summon request --title "$title" --agent "$AGENT" --run-url "$RUN_URL" --mode "$MODE")
+          echo "task_id=${tid}" >> "$GITHUB_OUTPUT"
+          echo "Posted ${tid}"
+
+      - name: Claim it (sebastian)
+        id: claim
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+        run: python -m tools.summon claim --task-id "$TASK_ID" --agent "$AGENT"
+
+      - name: Check out ${{ inputs.repo }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repo }}
+          path: ws
+          persist-credentials: false
+
+      - name: Run sebastian
+        id: run
+        env:
+          SEBASTIAN_BACKEND: openai
+          SEBASTIAN_BASE_URL: ${{ vars.SEBASTIAN_BASE_URL }}
+          SEBASTIAN_API_KEY_ENV: SEBASTIAN_MODEL_KEY
+          SEBASTIAN_MODEL_KEY: ${{ secrets.SEBASTIAN_MODEL_KEY }}
+          SEBASTIAN_MAX_STEPS: ${{ inputs.max_steps }}
+          SEBASTIAN_MAX_SECONDS: "1200"
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_HOST }}
+        run: |
+          export SEBASTIAN_HOME="$RUNNER_TEMP/sebastian-home"
+          trace=()
+          if [[ -n "$LANGFUSE_PUBLIC_KEY" && -n "$LANGFUSE_SECRET_KEY" ]]; then trace=(--langfuse); fi
+          set +e
+          # The task goes in as one argument (never a task file, whose front matter could grant commands).
+          sebastian run "$TASK" -w "$GITHUB_WORKSPACE/ws" --unattended --no-memory --sandbox none \
+            --usage-out "$RUNNER_TEMP/usage.json" "${trace[@]}" > "$RUNNER_TEMP/out.txt" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/out.txt"
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: Open a draft PR with the changes
+        id: publish
+        if: steps.run.outputs.code == '0'
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          TASKPR_TOKEN: ${{ secrets.TASKPR_TOKEN }}
+        run: |
+          set +e
+          python -m tools.taskpr publish --workspace ws --repo "$REPO" --task-id "$TASK_ID" --task "$TASK" \
+            --run-url "$RUN_URL" --model "$SEBASTIAN_MODEL" | tee "$RUNNER_TEMP/publish.txt"
+          code=${PIPESTATUS[0]}
+          cat "$RUNNER_TEMP/publish.txt" >> "$RUNNER_TEMP/out.txt"  # its last line becomes the result summary
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the outcome (sebastian)
+        if: always() && steps.claim.outcome == 'success'
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          RUN_CODE: ${{ steps.run.outputs.code }}
+          PUBLISH_CODE: ${{ steps.publish.outputs.code }}
+          UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_HOST }}
+        run: |
+          code="${RUN_CODE:-1}"
+          if [[ "$code" == "0" && -n "$PUBLISH_CODE" && "$PUBLISH_CODE" != "0" ]]; then code="$PUBLISH_CODE"; fi
+          usage=()
+          if [[ -f "$RUNNER_TEMP/usage.json" ]]; then usage=(--usage "$RUNNER_TEMP/usage.json"); fi
+          touch "$RUNNER_TEMP/out.txt"
+          python -m tools.summon finish --task-id "$TASK_ID" --agent "$AGENT" \
+            --exit-code "$code" --log "$RUNNER_TEMP/out.txt" --run-url "$RUN_URL" "${usage[@]}"
+
+      - name: Summary
+        if: always()
+        env:
+          TASK_ID: ${{ steps.request.outputs.task_id }}
+          RUN_CODE: ${{ steps.run.outputs.code }}
+          PUBLISH_CODE: ${{ steps.publish.outputs.code }}
+        run: |
+          pr=$(grep -o 'https://github.com/[^ ]*/pull/[0-9]*' "$RUNNER_TEMP/publish.txt" 2>/dev/null | tail -1)
+          {
+            echo "### Summon task: ${REPO}"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Task | \`${TASK_ID:-not posted}\` |"
+            echo "| Model | \`${SEBASTIAN_MODEL:-unset}\` |"
+            echo "| Sebastian exit code | ${RUN_CODE:-n/a} |"
+            echo "| Draft PR | ${pr:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$RUN_CODE" && "$RUN_CODE" != "0" ]] || [[ -n "$PUBLISH_CODE" && "$PUBLISH_CODE" != "0" ]]; then exit 1; fi

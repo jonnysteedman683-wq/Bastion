@@ -4,7 +4,7 @@ Bastion's private dashboard: roster, live ledger feed, headline numbers. Backlog
 
 - `app.py`: standard-library server. Serves `web/dist`, plus `/health`, `/api/feed`, `/api/roster`, `/api/operations`,
   `/api/approvals`, `/api/spend` and the Health view's `/api/checks` and `/api/watcher`.
-- `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Display only until G1d.
+- `caps.json`: daily spend caps in USD (fleet, per-agent default, per-agent overrides). Enforced by `tools.caps` (docs/CAPS.md).
 - `web/`: React + Tailwind + shadcn/ui. The browser only talks to `app.py`, never to Supabase.
 - `roster.json`: the agents shown on the roster.
 - `sources.json`: other AI systems connected to Bastion (see [Sources](#sources)).

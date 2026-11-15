@@ -366,6 +366,14 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(data["attention"][0]["kind"], "awaiting_approval")
         self.assertNotIn("output", data["tasks"][0])
 
+    def test_failures_endpoint_returns_the_report(self) -> None:
+        status, _, body = self.get("/api/failures")
+        data = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["source"], "ledger")
+        self.assertEqual(set(data), {"source", "generated_at", "window_days", "totals", "agents", "groups"})
+        self.assertNotIn("output", json.dumps(data))
+
     def test_approvals_lists_pending_tasks_with_safe_linx_commands(self) -> None:
         status, _, body = self.get("/api/approvals")
         data = json.loads(body)
@@ -848,6 +856,91 @@ class SourceRegistryTest(unittest.TestCase):
         hermes = next(a for a in agents if a["name"] == "Hermes")
         self.assertEqual(hermes["status"], "silent")
         self.assertEqual(set(hermes), {"name", "role", "runs_on", "last_seen", "status"})
+
+
+def failed(task_id: str, agent: str, ts: str, detail: str, **extra: str) -> dict[str, str]:
+    return {
+        "task_id": task_id,
+        "title": f"task {task_id}",
+        "status": "failed",
+        "agent": agent,
+        "finished_ts": ts,
+        "updated_ts": ts,
+        "detail": detail,
+        "run_url": "",
+        "trace_url": "",
+        **extra,
+    }
+
+
+class FailuresTest(unittest.TestCase):
+    def test_signature_ignores_numbers_ids_urls_and_paths(self) -> None:
+        sig = app.failure_signature
+        self.assertEqual(sig("Timed out after 300s"), sig("timed out after 45s"))
+        self.assertEqual(sig("commit 3f9a2b1c broke /srv/app/main.py"), sig("commit a1b2c3d4 broke /tmp/x/y.py"))
+        self.assertEqual(sig("see https://example.com/run/9"), "see <url>")
+        self.assertEqual(sig("id 123e4567-e89b-12d3-a456-426614174000 gone"), "id <id> gone")
+        self.assertNotEqual(sig("rate limited"), sig("timed out"))
+        self.assertEqual(sig(""), "(no reason given)")
+        self.assertLessEqual(len(sig("x" * 500)), 80)
+
+    def test_report_groups_by_agent_and_signature_and_flags_recurring(self) -> None:
+        tasks = [
+            failed("a", "Jules", "2026-11-04T11:00:00Z", "pip install timed out after 300s"),
+            failed("b", "Jules", "2026-11-03T11:00:00Z", "pip install timed out after 120s"),
+            failed(
+                "c",
+                "Jules",
+                "2026-11-02T11:00:00Z",
+                "pip install timed out after 90s",
+                run_url="https://github.com/o/r/actions/runs/1",
+            ),
+            failed("d", "Sebastian", "2026-11-04T10:00:00Z", "model refused"),
+            failed("old", "Jules", "2026-10-01T11:00:00Z", "pip install timed out after 1s"),
+            {
+                "task_id": "ok",
+                "title": "fine",
+                "status": "done",
+                "agent": "Sebastian",
+                "finished_ts": "2026-11-04T09:00:00Z",
+                "updated_ts": "2026-11-04T09:00:00Z",
+                "detail": "",
+            },
+        ]
+        events = [
+            app.Event(7, "2026-11-04T11:50:00Z", "Aider", "run.failed", "aider: failed with exit code 1 after 4s"),
+            app.Event(6, "2026-11-04T11:40:00Z", "Sebastian", "task.failed", "counted through its task already"),
+            app.Event(5, "2026-11-04T11:30:00Z", "Aider", "run.finished", "aider: finished in 9s"),
+        ]
+        report = app.failures_report(tasks, events, NOW)
+        self.assertEqual(report["window_days"], 7)
+        self.assertEqual(report["totals"], {"last_24h": 3, "last_7d": 5, "recurring": 1})
+        top = report["groups"][0]
+        self.assertEqual((top["agent"], top["count"], top["recurring"]), ("Jules", 3, True))
+        self.assertEqual(top["last_ts"], "2026-11-04T11:00:00Z")
+        self.assertEqual(top["first_ts"], "2026-11-02T11:00:00Z")
+        self.assertEqual(top["example"]["reason"], "pip install timed out after 300s")
+        self.assertEqual(top["run_url"], "https://github.com/o/r/actions/runs/1")
+        self.assertEqual({g["agent"] for g in report["groups"]}, {"Jules", "Sebastian", "Aider"})
+        agents = {a["agent"]: a for a in report["agents"]}
+        self.assertEqual(agents["Sebastian"]["rate"], 0.5)
+        self.assertIsNone(agents["Aider"]["rate"])
+        self.assertEqual(report["agents"][0]["agent"], "Jules")
+
+    def test_report_is_empty_and_safe_on_bad_input(self) -> None:
+        bad = [failed("x", "Jules", "not a time", "boom"), {"status": "failed"}]
+        report = app.failures_report(bad, [], NOW)
+        self.assertEqual(report["totals"], {"last_24h": 0, "last_7d": 0, "recurring": 0})
+        self.assertEqual(report["groups"], [])
+
+    def test_example_reason_is_cut(self) -> None:
+        report = app.failures_report([failed("x", "Jules", "2026-11-04T11:00:00Z", "y" * 900)], [], NOW)
+        self.assertLessEqual(len(report["groups"][0]["example"]["reason"]), 200)
+
+    def test_demo_has_a_failure_to_show(self) -> None:
+        demo = app.DemoLedger(lambda: NOW)
+        report = app.failures_report(demo.operations()["tasks"], demo.events(0, 50), NOW)
+        self.assertGreater(report["totals"]["last_7d"], 0)
 
 
 if __name__ == "__main__":

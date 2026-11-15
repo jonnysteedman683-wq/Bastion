@@ -50,6 +50,7 @@ Exit: a run uses yesterday's memory, and a past failure is now a test.
 
 - [ ] I1 Memory loop: nightly consolidation of `memory.write` entries
 - [ ] I2 Failure loop: failed runs become scar eval cases across agents
+  - [x] I2a Failures view: `GET /api/failures` groups the last 7 days' failed tasks and failed local runs (`run.failed` and any `*.failed`/`*.error` event) by agent and error signature (numbers, ids, URLs and paths masked), with per-agent counts and failure rate; a fault seen 3 times in a week is marked recurring, the scar-case candidates for I2. The nav shows a red dot on a failure today or any recurring fault. *Done when* a failed task and a `run.failed` event show grouped in the view and a third repeat is marked recurring.
 
 ## M4 · Showcase
 Exit: the public page shows live counts and no private fields.

@@ -1,26 +1,29 @@
-import { Activity, Bot, HeartPulse, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Activity, Bot, Bug, HeartPulse, Check, ClipboardCopy, Coins, Inbox, LayoutDashboard, Map, OctagonPause, Power, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FormEvent, Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApprovals, useChecks, useFeed, useWatcher, useNow, useOperations, useRoster, useSpend } from "@/hooks";
+import { useApprovals, useChecks, useFailures, useFeed, useWatcher, useNow, useOperations, useRoster, useSpend } from "@/hooks";
 import { CHECK_STYLE, DRAFTER_LABEL, checksHeadline, checksNeedAttention, watcherBadge, watcherNeedsAttention, type ChecksResponse, type WatcherResponse } from "@/lib/health";
 
 import { isOverdue, isSafeGithubUrl, isSafeTraceUrl, killSwitchCommand, timeAgo, waitingSince, type Agent, type Approval, type Control, type LedgerEvent, type OperationsResponse } from "@/lib/ledger";
 import { cn } from "@/lib/utils";
+import { failuresNeedAttention } from "@/lib/failures";
+import { FailuresView } from "@/components/failures-view";
 import { formatUsd } from "@/lib/spend";
 import { todayIsClear, todaySummary, type Today } from "@/lib/today";
 import { requestMagicLink, signOut } from "@/lib/auth";
 
 const SpendView = lazy(() => import("@/components/spend-view").then((m) => ({ default: m.SpendView })));
 
-export type View = "operations" | "health" | "approvals" | "spend" | "roster" | "ledger" | "map";
+export type View = "operations" | "health" | "failures" | "approvals" | "spend" | "roster" | "ledger" | "map";
 
 const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "operations", label: "Operations", icon: LayoutDashboard },
   { id: "health", label: "Health", icon: HeartPulse },
+  { id: "failures", label: "Failures", icon: Bug },
   { id: "map", label: "Command map", icon: Map },
   { id: "approvals", label: "Approvals", icon: Inbox },
   { id: "spend", label: "Spend", icon: Coins },
@@ -39,6 +42,7 @@ export default function App() {
   const spend = useSpend();
   const checks = useChecks();
   const watcher = useWatcher();
+  const failures = useFailures();
   const healthAlert = checksNeedAttention(checks.data) || watcherNeedsAttention(watcher.data);
   const pendingCount = approvals.data?.approvals.length ?? 0;
   const source = feed.source ?? roster.data?.source ?? null;
@@ -68,6 +72,9 @@ export default function App() {
                 <span className="ml-auto rounded-full bg-primary px-1.5 text-xs tabular-nums text-primary-foreground" aria-label={`${pendingCount} pending`}>
                   {pendingCount}
                 </span>
+              )}
+              {id === "failures" && failuresNeedAttention(failures.data) && (
+                <span className="ml-auto size-2 rounded-full bg-destructive" aria-label="needs attention" />
               )}
               {id === "health" && healthAlert && (
                 <span className="ml-auto size-2 rounded-full bg-destructive" aria-label="needs attention" />
@@ -103,6 +110,7 @@ export default function App() {
             <WatcherCard data={watcher.data} error={watcher.error} now={now} />
           </div>
         )}
+        {view === "failures" && <FailuresView data={failures.data} error={failures.error} now={now} />}
         {view === "map" && <CommandMap agents={roster.data?.agents} events={feed.events} now={now} />}
         {view === "approvals" && <Approvals items={approvals.data?.approvals} now={now} />}
         {view === "spend" && (

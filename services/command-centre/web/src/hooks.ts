@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SpendResponse } from "@/lib/spend";
 import type { ChecksResponse, WatcherResponse } from "@/lib/health";
+import type { FailuresResponse } from "@/lib/failures";
 import { cursorOf, getJSON, mergeEvents, type ApprovalsResponse, type FeedResponse, type LedgerEvent, type OperationsResponse, type RosterResponse } from "@/lib/ledger";
 
 const FEED_POLL_MS = 5_000;
@@ -138,6 +139,10 @@ function usePolled<T>(path: string, ms: number) {
 
 export function useChecks() {
   return usePolled<ChecksResponse>("/api/checks", HEALTH_POLL_MS);
+}
+
+export function useFailures() {
+  return usePolled<FailuresResponse>("/api/failures", HEALTH_POLL_MS);
 }
 
 export function useWatcher() {

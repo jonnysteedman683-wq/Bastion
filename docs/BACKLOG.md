@@ -18,6 +18,7 @@ Exit: summon to live result on the dashboard with no API key, at $0.
 - [x] S1 Command centre v0: shadcn-admin shell, roster, live ledger feed (read-only Supabase role)
 - [ ] S2 🔒 Cloudflare Access in front of the command centre
 - [x] S3 Summon: post a `task.request`, dispatch `sebastian demo` on GitHub Actions, show the result
+- [ ] S4 🔒 Summon a task: `summon-task.yml` runs `sebastian run "<task>"` on a listed repo with any OpenAI-compatible model (file tools only, unattended), and `python -m tools.taskpr` opens a draft PR from its changes, refusing `.github/` edits; the PR token never reaches the agent ([SUMMON_TASK.md](SUMMON_TASK.md)). *Done when* a summoned task on Sebastian opens a draft PR and the command centre shows the result with the PR link.
 
 ## M2 · Safety
 Exit: a deliberate cap breach pauses the agent and alerts Jonny.

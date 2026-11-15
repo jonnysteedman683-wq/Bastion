@@ -15,6 +15,9 @@
 # Secrets (only their sha256 is stored in the ledger's unisync_tokens):
 #   UNISYNC_ORCHESTRATOR_TOKEN  lestinxor, may post task.request only
 #   UNISYNC_AGENT_TOKEN         sebastian, may post task.claim, task.result, task.failed only
+#   LANGFUSE_PUBLIC_KEY         optional, with LANGFUSE_SECRET_KEY: trace demo runs to Langfuse (G1c-3)
+#   LANGFUSE_SECRET_KEY
+# Variable (not secret): LANGFUSE_HOST, optional https origin; default https://cloud.langfuse.com
 
 name: Summon
 
@@ -56,7 +59,7 @@ jobs:
       UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
-      SEBASTIAN_SHA: f67761e73039c92a2ddc6c9f4445249b08118211  # B78: --usage-out
+      SEBASTIAN_SHA: 7d6be7f4ae2190dd628debe1e0d69aaa1631f811  # B79: --langfuse
       MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,11 +105,17 @@ jobs:
 
       - name: Run sebastian (${{ inputs.mode }})
         id: run
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_HOST }}
         run: |
           mkdir -p "$RUNNER_TEMP/ws"
+          trace=()  # G1c: a Langfuse trace per run, linked from the outcome; a Langfuse error is only a warning
+          if [[ -n "$LANGFUSE_PUBLIC_KEY" && -n "$LANGFUSE_SECRET_KEY" ]]; then trace=(--langfuse); fi
           set +e
           case "$MODE" in
-            demo)  sebastian demo -w "$RUNNER_TEMP/ws" --usage-out "$RUNNER_TEMP/usage.json" \
+            demo)  sebastian demo -w "$RUNNER_TEMP/ws" --usage-out "$RUNNER_TEMP/usage.json" "${trace[@]}" \
                      > "$RUNNER_TEMP/out.txt" 2>&1 ;;
             evals) python -m sebastian.evals > "$RUNNER_TEMP/out.txt" 2>&1 ;;
             *)     echo "unknown mode: $MODE" > "$RUNNER_TEMP/out.txt"; false ;;
@@ -121,6 +130,7 @@ jobs:
           TASK_ID: ${{ steps.request.outputs.task_id }}
           CODE: ${{ steps.run.outputs.code }}
           UNISYNC_AGENT_TOKEN: ${{ secrets.UNISYNC_AGENT_TOKEN }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_HOST }}  # finish keeps a trace link only on Langfuse Cloud or this host
         run: |
           usage=()  # G1b: token usage for the Spend view, when the mode wrote one
           if [[ -f "$RUNNER_TEMP/usage.json" ]]; then usage=(--usage "$RUNNER_TEMP/usage.json"); fi

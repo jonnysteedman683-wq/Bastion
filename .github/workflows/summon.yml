@@ -59,7 +59,7 @@ jobs:
       AGENT: sebastian
       UNISYNC_GATEWAY_URL: https://dcjqwnapxgocitvntzzm.supabase.co/functions/v1/unisync
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      LESTINXOR_SHA: 5a2c184da5e08f0558057269f7349d2e313aa39a
+      LESTINXOR_SHA: b3ff633be78cd52f12c89142178e9e399b077982
       SEBASTIAN_SHA: 7d6be7f4ae2190dd628debe1e0d69aaa1631f811  # B79: --langfuse
       MODE: ${{ inputs.mode }}
     steps:

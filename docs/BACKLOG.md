@@ -68,6 +68,7 @@ Exit: a fresh account deploys the whole stack with one command.
 
 - [x] A1 PR steward: `python -m tools.steward scan` triages every open PR, read-only, and posts a heartbeat and escalations ([STEWARD.md](STEWARD.md))
 - [x] A2 🔒 Schedule the steward: `.github/workflows/steward.yml`, twice daily and on demand
+- [x] A4 Sentry: `python -m tools.agent_a patrol` patrols every open PR for secrets on added lines and edits to AGENTS.md's Never list, watches the ledger for agents stuck in failure streaks, and escalates on the ledger with phone alerts for critical findings ([AGENT_A.md](AGENT_A.md))
 - [ ] A3 Steward at R1: merge `merge-ready` dependency bumps itself once G2's trust ladder exists
 
 ## M7 · Owner controls

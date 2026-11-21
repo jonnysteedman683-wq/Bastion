@@ -33,6 +33,7 @@ Nothing in the cloud calls into an agent; agents write to the ledger, dashboards
 | `tools/steward/` | PR steward agent: triages every open PR in the fleet and reports it on the ledger ([how](docs/STEWARD.md)) |
 | `tools/agent-a/` | Agent-A, the sentry: patrols every open PR for leaked secrets and Never-list edits, watches the ledger for stuck agents ([how](docs/AGENT_A.md)) |
 | `tools/report/` | Report: any agent on a PC or server tells the command centre what it is doing ([how](docs/REPORT.md)) |
+| `tools/wren/` | Wren, the memory curator: consolidates the ledger's `memory.write` entries into dated notes per scope (I1) ([how](docs/WREN.md)) |
 | `tools/local/` | Run the command centre on your own machine, for agents that report in locally ([how](docs/REPORT.md#a-command-centre-on-your-own-machine)) |
 | `deploy/forge-vm/` | The Forge VM: Vortex on one Always Free e2-micro behind Tailscale Funnel, with per-agent API keys ([runbook](docs/FORGE_VM.md)) |
 | `.mcp.json` | Claude Code's connection to Vortex; address and key come from the environment ([guide](docs/VORTEX_MCP.md)) |
